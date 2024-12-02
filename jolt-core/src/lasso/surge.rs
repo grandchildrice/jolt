@@ -186,27 +186,6 @@ where
     fn protocol_name() -> &'static [u8] {
         b"SurgeMemCheck"
     }
-
-    fn compute_leaves_batched(
-        preprocessing: &Self::Preprocessing,
-        polynomials_array: &[Self::Polynomials],
-        exogenous_polynomials_array: &[JoltPolynomials<F>],
-        gamma: &F,
-        tau: &F,
-    ) -> (
-        <Self::ReadWriteGrandProduct as crate::subprotocols::grand_product::BatchedGrandProduct<
-            F,
-            PCS,
-            ProofTranscript,
-        >>::Leaves,
-        <Self::InitFinalGrandProduct as crate::subprotocols::grand_product::BatchedGrandProduct<
-            F,
-            PCS,
-            ProofTranscript,
-        >>::Leaves,
-    ) {
-        todo!()
-    }
 }
 
 impl<F, PCS, Instruction, const C: usize, const M: usize, ProofTranscript>

@@ -18,7 +18,7 @@ use crate::{
 
 use crate::field::JoltField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use itertools::interleave;
+use itertools::{concat, interleave};
 use rayon::prelude::*;
 
 #[derive(CanonicalSerialize, CanonicalDeserialize)]
@@ -362,13 +362,27 @@ where
         let protocol_name = Self::protocol_name();
         transcript.append_message(protocol_name);
 
-        let (read_write_leaves, init_final_leaves) = Self::compute_leaves_batched(
-            preprocessing,
-            polynomials_array,
-            jolt_polynomials_array,
-            &gamma,
-            &tau,
-        );
+        let mut read_write_leaves_singles = Vec::new();
+        let mut init_final_leaves_singles = Vec::new();
+        for (polynomials, jolt_polynomials) in polynomials_array.iter().zip(jolt_polynomials_array)
+        {
+            let (read_write_leaves_single, init_final_leaves_single) =
+                Self::compute_leaves(preprocessing, polynomials, jolt_polynomials, &gamma, &tau);
+            read_write_leaves_singles.push(read_write_leaves_single);
+            init_final_leaves_singles.push(init_final_leaves_single);
+        }
+
+        let read_write_leaves = <Self::ReadWriteGrandProduct as BatchedGrandProduct<
+            F,
+            PCS,
+            ProofTranscript,
+        >>::concat_leaves(&read_write_leaves_singles);
+        let init_final_leaves = <Self::InitFinalGrandProduct as BatchedGrandProduct<
+            F,
+            PCS,
+            ProofTranscript,
+        >>::concat_leaves(&init_final_leaves_singles);
+
         let (mut read_write_circuit, read_write_hashes) = Self::read_write_grand_product_batched(
             preprocessing,
             polynomials_array,
@@ -607,17 +621,6 @@ where
         preprocessing: &Self::Preprocessing,
         polynomials: &Self::Polynomials,
         exogenous_polynomials: &JoltPolynomials<F>,
-        gamma: &F,
-        tau: &F,
-    ) -> (
-        <Self::ReadWriteGrandProduct as BatchedGrandProduct<F, PCS, ProofTranscript>>::Leaves,
-        <Self::InitFinalGrandProduct as BatchedGrandProduct<F, PCS, ProofTranscript>>::Leaves,
-    );
-
-    fn compute_leaves_batched(
-        preprocessing: &Self::Preprocessing,
-        polynomials_array: &[Self::Polynomials],
-        exogenous_polynomials_array: &[JoltPolynomials<F>],
         gamma: &F,
         tau: &F,
     ) -> (

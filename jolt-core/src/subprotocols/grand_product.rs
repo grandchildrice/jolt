@@ -54,6 +54,8 @@ where
     type Leaves;
     type Config: Default + Clone + Copy;
 
+    fn concat_leaves(leaves: &[Self::Leaves]) -> Self::Leaves;
+
     /// Constructs the grand product circuit(s) from `leaves` with the default configuration
     fn construct(leaves: Self::Leaves) -> Self {
         Self::construct_with_config(leaves, Self::Config::default())
@@ -258,6 +260,10 @@ where
     // (leaf values, batch size)
     type Leaves = (Vec<F>, usize);
     type Config = ();
+
+    fn concat_leaves(leaves: &[Self::Leaves]) -> Self::Leaves {
+        todo!()
+    }
 
     #[tracing::instrument(skip_all, name = "BatchedDenseGrandProduct::construct")]
     fn construct(leaves: Self::Leaves) -> Self {

@@ -55,6 +55,10 @@ where
     type Leaves = (Vec<F>, usize);
     type Config = QuarkGrandProductConfig;
 
+    fn concat_leaves(leaves: &[Self::Leaves]) -> Self::Leaves {
+        todo!()
+    }
+
     /// Constructs the grand product circuit(s) from `leaves`
     #[tracing::instrument(skip_all, name = "BatchedGrandProduct::construct")]
     fn construct(leaves: Self::Leaves) -> Self {
