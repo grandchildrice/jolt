@@ -459,4 +459,57 @@ mod tests {
             assert_eq!(r_prover, r_verifier);
         }
     }
+
+    #[test]
+    fn batched_dense_prove_verify() {
+        let mut rng = test_rng();
+        const LAYER_SIZE: [usize; 7] = [1 << 2, 1 << 3, 1 << 4, 1 << 5, 1 << 6, 1 << 7, 1 << 8];
+        const BATCH_SIZE: [usize; 5] = [2, 3, 4, 5, 6];
+
+        for (layer_size, batch_size) in LAYER_SIZE
+            .into_iter()
+            .cartesian_product(BATCH_SIZE.into_iter())
+        {
+            let leaves: Vec<Vec<Fr>> = std::iter::repeat_with(|| {
+                std::iter::repeat_with(|| Fr::random(&mut rng))
+                    .take(layer_size)
+                    .collect::<Vec<_>>()
+            })
+            .take(batch_size)
+            .collect();
+
+            let mut batched_circuit = <BatchedDenseGrandProduct<Fr> as BatchedGrandProduct<
+                Fr,
+                Zeromorph<Bn254, KeccakTranscript>,
+                KeccakTranscript,
+            >>::construct((leaves.concat(), batch_size));
+            let mut prover_transcript: KeccakTranscript = KeccakTranscript::new(b"test_transcript");
+
+            // I love the rust type system
+            let claims = <BatchedDenseGrandProduct<Fr> as BatchedGrandProduct<
+                Fr,
+                Zeromorph<Bn254, KeccakTranscript>,
+                KeccakTranscript,
+            >>::claimed_outputs(&batched_circuit);
+            let (proof, r_prover) = <BatchedDenseGrandProduct<Fr> as BatchedGrandProduct<
+                Fr,
+                Zeromorph<Bn254, KeccakTranscript>,
+                KeccakTranscript,
+            >>::prove_grand_product(
+                &mut batched_circuit, None, &mut prover_transcript, None
+            );
+
+            let mut verifier_transcript: KeccakTranscript =
+                KeccakTranscript::new(b"test_transcript");
+            verifier_transcript.compare_to(prover_transcript);
+            let (_, r_verifier) = BatchedDenseGrandProduct::verify_grand_product(
+                &proof,
+                &claims,
+                None,
+                &mut verifier_transcript,
+                None,
+            );
+            assert_eq!(r_prover, r_verifier);
+        }
+    }
 }

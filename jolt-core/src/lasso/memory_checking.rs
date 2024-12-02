@@ -67,6 +67,28 @@ where
     pub exogenous_openings: OtherOpenings,
 }
 
+#[derive(CanonicalSerialize, CanonicalDeserialize)]
+pub struct MemoryCheckingBatchedProof<F, PCS, Openings, OtherOpenings, ProofTranscript>
+where
+    F: JoltField,
+    PCS: CommitmentScheme<ProofTranscript, Field = F>,
+    Openings: StructuredPolynomialData<F> + Sync + CanonicalSerialize + CanonicalDeserialize,
+    OtherOpenings: ExogenousOpenings<F> + Sync,
+    ProofTranscript: Transcript,
+{
+    /// Read/write/init/final multiset hashes for each memory
+    pub multiset_hashes: MultisetHashes<F>,
+    /// The read and write grand products for every memory has the same size,
+    /// so they can be batched.
+    pub read_write_grand_product: BatchedGrandProductProof<PCS, ProofTranscript>,
+    /// The init and final grand products for every memory has the same size,
+    /// so they can be batched.
+    pub init_final_grand_product: BatchedGrandProductProof<PCS, ProofTranscript>,
+    /// The openings associated with the grand products.
+    pub openings: Vec<Openings>,
+    pub exogenous_openings: Vec<OtherOpenings>,
+}
+
 /// This type, used within a `StructuredPolynomialData` struct, indicates that the
 /// field has a corresponding opening but no corrresponding polynomial or commitment ––
 /// the prover doesn't need to compute a witness polynomial or commitment because
@@ -130,7 +152,7 @@ pub trait ExogenousOpenings<F: JoltField>:
     ) -> Vec<&T>;
 }
 
-#[derive(Default, CanonicalSerialize, CanonicalDeserialize)]
+#[derive(Default, Clone, CanonicalSerialize, CanonicalDeserialize)]
 pub struct NoExogenousOpenings;
 impl<F: JoltField> ExogenousOpenings<F> for NoExogenousOpenings {
     fn openings(&self) -> Vec<&F> {
@@ -273,6 +295,71 @@ where
         );
 
         MemoryCheckingProof {
+            multiset_hashes,
+            read_write_grand_product,
+            init_final_grand_product,
+            openings,
+            exogenous_openings,
+        }
+    }
+
+    #[tracing::instrument(skip_all, name = "MemoryCheckingProver::prove_memory_checking_batched")]
+    /// Generates a memory checking proof for the given committed polynomials.
+    fn prove_memory_checking_batched(
+        pcs_setup: &PCS::Setup,
+        preprocessing: &Self::Preprocessing,
+        polynomials: &[Self::Polynomials],
+        jolt_polynomials: &[JoltPolynomials<F>],
+        opening_accumulator: &mut ProverOpeningAccumulator<F, ProofTranscript>,
+        transcript: &mut ProofTranscript,
+    ) -> MemoryCheckingBatchedProof<F, PCS, Self::Openings, Self::ExogenousOpenings, ProofTranscript>
+    {
+        let (
+            read_write_grand_product,
+            init_final_grand_product,
+            multiset_hashes,
+            r_read_write,
+            r_init_final,
+        ) = Self::prove_grand_products_batched(
+            preprocessing,
+            polynomials,
+            jolt_polynomials,
+            opening_accumulator,
+            transcript,
+            pcs_setup,
+        );
+
+        let read_write_batch_size =
+            multiset_hashes.read_hashes.len() + multiset_hashes.write_hashes.len();
+        let init_final_batch_size =
+            multiset_hashes.init_hashes.len() + multiset_hashes.final_hashes.len();
+
+        // For a batch size of k, the first log2(k) elements of `r_read_write`/`r_init_final`
+        // form the point at which the output layer's MLE is evaluated. The remaining elements
+        // then form the point at which the leaf layer's polynomials are evaluated.
+        let (_, r_read_write_opening) =
+            r_read_write.split_at(read_write_batch_size.next_power_of_two().log_2());
+        let (_, r_init_final_opening) =
+            r_init_final.split_at(init_final_batch_size.next_power_of_two().log_2());
+
+        let mut openings = Vec::new();
+        let mut exogenous_openings = Vec::new();
+
+        for (polynomials, jolt_polynomials) in polynomials.iter().zip(jolt_polynomials) {
+            let (openings_single, exogenous_openings_single) = Self::compute_openings(
+                preprocessing,
+                opening_accumulator,
+                polynomials,
+                jolt_polynomials,
+                r_read_write_opening,
+                r_init_final_opening,
+                transcript,
+            );
+            openings.push(openings_single);
+            exogenous_openings.push(exogenous_openings_single);
+        }
+
+        MemoryCheckingBatchedProof {
             multiset_hashes,
             read_write_grand_product,
             init_final_grand_product,
