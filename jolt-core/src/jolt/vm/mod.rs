@@ -417,6 +417,16 @@ where
             &trace,
         );
 
+        let mut serialized_memory_polynomials = Vec::new();
+        memory_polynomials
+            .serialize_compressed(&mut serialized_memory_polynomials)
+            .unwrap();
+
+        let mut file = File::create("memory_polynomials.json").unwrap();
+        file.write_all(&serialized_memory_polynomials).unwrap();
+
+        println!("Data serialized and written to memory_polynomials.json");
+
         let (bytecode_polynomials, range_check_polys) = rayon::join(
             || {
                 BytecodeProof::<F, PCS, ProofTranscript>::generate_witness(
