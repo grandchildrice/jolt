@@ -630,6 +630,27 @@ where
         )
     }
 
+    fn compute_leaves_batched(
+        preprocessing: &Self::Preprocessing,
+        polynomials_array: &[Self::Polynomials],
+        exogenous_polynomials_array: &[JoltPolynomials<F>],
+        gamma: &F,
+        tau: &F,
+    ) -> (
+        <Self::ReadWriteGrandProduct as crate::subprotocols::grand_product::BatchedGrandProduct<
+            F,
+            PCS,
+            ProofTranscript,
+        >>::Leaves,
+        <Self::InitFinalGrandProduct as crate::subprotocols::grand_product::BatchedGrandProduct<
+            F,
+            PCS,
+            ProofTranscript,
+        >>::Leaves,
+    ) {
+        todo!()
+    }
+
     fn uninterleave_hashes(
         _preprocessing: &Self::Preprocessing,
         read_write_hashes: Vec<F>,
