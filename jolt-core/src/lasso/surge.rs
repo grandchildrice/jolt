@@ -491,6 +491,20 @@ where
         (proof, debug_info)
     }
 
+    #[tracing::instrument(skip_all, name = "Surge::prove")]
+    pub fn prove_with_batch_gkr(
+        preprocessing: &SurgePreprocessing<F, Instruction, C, M>,
+        generators: &PCS::Setup,
+        ops_vec: Vec<Vec<Instruction>>,
+    ) -> Vec<(Self, Option<ProverDebugInfo<F, ProofTranscript>>)> {
+        let proofs = ops_vec
+            .into_par_iter()
+            .map(|ops| Self::prove(&preprocessing, &generators, ops))
+            .collect();
+
+        proofs
+    }
+
     pub fn verify(
         preprocessing: &SurgePreprocessing<F, Instruction, C, M>,
         generators: &PCS::Setup,
@@ -672,6 +686,7 @@ mod tests {
     use ark_bn254::{Bn254, Fr};
     use ark_std::test_rng;
     use rand_core::RngCore;
+    use rayon::prelude::*;
 
     #[test]
     fn surge_32_e2e() {
@@ -734,5 +749,45 @@ mod tests {
         >::prove(&preprocessing, &generators, ops);
 
         SurgeProof::verify(&preprocessing, &generators, proof, debug_info).expect("should work");
+    }
+
+    #[test]
+    fn surge_32_batch() {
+        let mut rng = test_rng();
+        const WORD_SIZE: usize = 32;
+        const C: usize = 4;
+        const M: usize = 1 << 16;
+        const NUM_OPS: usize = 1024;
+
+        let ops1 = std::iter::repeat_with(|| {
+            XORInstruction::<WORD_SIZE>(rng.next_u32() as u64, rng.next_u32() as u64)
+        })
+        .take(NUM_OPS)
+        .collect();
+
+        let ops2 = std::iter::repeat_with(|| {
+            XORInstruction::<WORD_SIZE>(rng.next_u32() as u64, rng.next_u32() as u64)
+        })
+        .take(NUM_OPS)
+        .collect();
+
+        let preprocessing = SurgePreprocessing::preprocess();
+        let generators = HyperKZG::<_, KeccakTranscript>::setup(&[CommitShape::new(
+            M,
+            BatchType::SurgeReadWrite,
+        )]);
+        let proofs = SurgeProof::<
+            Fr,
+            HyperKZG<Bn254, KeccakTranscript>,
+            XORInstruction<WORD_SIZE>,
+            C,
+            M,
+            KeccakTranscript,
+        >::prove_with_batch_gkr(&preprocessing, &generators, vec![ops1, ops2]);
+
+        proofs.into_par_iter().for_each(|(proof, debug_info)| {
+            SurgeProof::verify(&preprocessing, &generators, proof, debug_info)
+                .expect("Verification failed");
+        });
     }
 }
