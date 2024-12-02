@@ -56,7 +56,12 @@ where
     type Config = QuarkGrandProductConfig;
 
     fn concat_leaves(leaves: &[Self::Leaves]) -> Self::Leaves {
-        todo!()
+        let values = leaves
+            .iter()
+            .flat_map(|(values, _)| values.clone())
+            .collect();
+        let batch_size = leaves.iter().map(|(_, batch_size)| *batch_size).sum();
+        (values, batch_size)
     }
 
     /// Constructs the grand product circuit(s) from `leaves`

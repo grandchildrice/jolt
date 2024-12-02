@@ -963,8 +963,8 @@ where
     type Leaves = (Vec<Vec<usize>>, Vec<Vec<F>>); // (flags, fingerprints)
     type Config = SparseGrandProductConfig;
 
-    fn concat_leaves(leaves: &[Self::Leaves]) -> Self::Leaves {
-        todo!()
+    fn concat_leaves(_leaves: &[Self::Leaves]) -> Self::Leaves {
+        unimplemented!()
     }
 
     #[tracing::instrument(skip_all, name = "ToggledBatchedGrandProduct::construct")]
