@@ -401,13 +401,13 @@ where
                 ProofTranscript,
             >::generate_witness(&preprocessing.instruction_lookups, &trace);
 
-        let mut serialized_data = Vec::new();
+        let mut serialized_instruction_polynomials = Vec::new();
         instruction_polynomials
-            .serialize_compressed(&mut serialized_data)
+            .serialize_compressed(&mut serialized_instruction_polynomials)
             .unwrap();
 
         let mut file = File::create("instruction_polynomials.json").unwrap();
-        file.write_all(&serialized_data).unwrap();
+        file.write_all(&serialized_instruction_polynomials).unwrap();
 
         println!("Data serialized and written to instruction_polynomials.json");
 
