@@ -324,6 +324,15 @@ mod tests {
             1 << 20,
             1 << 20,
         );
+        #[cfg(feature = "para")]
+        let (proof, commitments, debug_info) =
+        <RV32IJoltVM as Jolt<F, PCS, C, M, ProofTranscript>>::segment_prove(
+            io_device,
+            trace,
+            preprocessing.clone(),
+            false, // セグメントの最後か？ もし最後なら、program_ioのoutputのOutputSumcheckProofで一致を証明する。
+        );
+        #[cfg(not(feature = "para"))]
         let (proof, commitments, debug_info) =
             <RV32IJoltVM as Jolt<F, PCS, C, M, ProofTranscript>>::prove(
                 io_device,

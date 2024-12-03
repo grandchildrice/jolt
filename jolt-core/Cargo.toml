@@ -109,6 +109,7 @@ default = [
 ]
 host = ["dep:reqwest", "dep:tokio"]
 para = ["tracer/trace-segmentation"]
+ignore-all-io = []
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 memory-stats = "1.0.0"

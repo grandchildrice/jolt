@@ -938,6 +938,130 @@ where
         }
     }
 
+    fn segment_prove_outputs(
+        polynomials: &ReadWriteMemoryPolynomials<F>,
+        program_io: &JoltDevice,
+        opening_accumulator: &mut ProverOpeningAccumulator<F, ProofTranscript>,
+        transcript: &mut ProofTranscript,
+        is_final_segment: bool,
+    ) -> Self {
+        let memory_size = polynomials.v_final.len();
+        let num_rounds = memory_size.log_2();
+        let r_eq = transcript.challenge_vector(num_rounds);
+        let eq: DensePolynomial<F> = DensePolynomial::new(EqPolynomial::evals(&r_eq));
+
+        let input_start_index = memory_address_to_witness_index(
+            program_io.memory_layout.input_start,
+            &program_io.memory_layout,
+        ) as u64;
+        let ignore_start_index =
+            memory_address_to_witness_index(
+                if is_final_segment {
+                    RAM_START_ADDRESS
+                } else {
+                    // 最後のセグメント以外は、outputがまだメモリに書き込まれていないので、その部分はチェックしないようにする。
+                    println!("output_startを挿入");
+                    program_io.memory_layout.output_start 
+                },
+                &program_io.memory_layout) as u64;
+        
+        #[cfg(not(feature = "ignore-all-io"))]
+        let io_witness_range: Vec<_> = (0..memory_size as u64)
+            .map(|i| {
+                if i >= input_start_index && i < ignore_start_index {
+                    F::one()
+                } else {
+                    F::zero()
+                }
+            })
+            .collect();
+        
+        #[cfg(feature = "ignore-all-io")]
+        let io_witness_range: Vec<_> = (0..memory_size as u64)
+            .map(|i| {
+                F::zero()
+            })
+            .collect();
+
+        let mut v_io: Vec<u64> = vec![0; memory_size];
+        // Copy input bytes
+        let mut input_index = memory_address_to_witness_index(
+            program_io.memory_layout.input_start,
+            &program_io.memory_layout,
+        );
+        for chunk in program_io.inputs.chunks(4) {
+            let mut word = [0u8; 4];
+            for (i, byte) in chunk.iter().enumerate() {
+                word[i] = *byte;
+            }
+            let word = u32::from_le_bytes(word);
+            v_io[input_index] = word as u64;
+            input_index += 1;
+        }
+        // Copy output bytes
+        let mut output_index = memory_address_to_witness_index(
+            program_io.memory_layout.output_start,
+            &program_io.memory_layout,
+        );
+        for chunk in program_io.outputs.chunks(4) {
+            let mut word = [0u8; 4];
+            for (i, byte) in chunk.iter().enumerate() {
+                word[i] = *byte;
+            }
+            let word = u32::from_le_bytes(word);
+            v_io[output_index] = word as u64;
+            output_index += 1;
+        }
+
+        // Copy panic bit
+        v_io[memory_address_to_witness_index(
+            program_io.memory_layout.panic,
+            &program_io.memory_layout,
+        )] = program_io.panic as u64;
+        if !program_io.panic {
+            // Set termination bit
+            v_io[memory_address_to_witness_index(
+                program_io.memory_layout.termination,
+                &program_io.memory_layout,
+            )] = 1;
+        }
+
+        let mut sumcheck_polys = vec![
+            eq,
+            DensePolynomial::new(io_witness_range),
+            polynomials.v_final.clone(),
+            DensePolynomial::from_u64(&v_io),
+        ];
+
+        // eq * io_witness_range * (v_final - v_io)
+        let output_check_fn = |vals: &[F]| -> F { vals[0] * vals[1] * (vals[2] - vals[3]) };
+
+        let (sumcheck_proof, r_sumcheck, sumcheck_openings) =
+            SumcheckInstanceProof::<F, ProofTranscript>::prove_arbitrary::<_>(
+                &F::zero(),
+                num_rounds,
+                &mut sumcheck_polys,
+                output_check_fn,
+                3,
+                transcript,
+            );
+
+        opening_accumulator.append(
+            &[&polynomials.v_final],
+            DensePolynomial::new(EqPolynomial::evals(&r_sumcheck)),
+            r_sumcheck.to_vec(),
+            &[&sumcheck_openings[2]],
+            transcript,
+        );
+
+        Self {
+            num_rounds,
+            sumcheck_proof,
+            opening: sumcheck_openings[2], // only need v_final; verifier computes the rest on its own
+            _pcs: PhantomData,
+        }
+    }
+
     fn verify(
         proof: &Self,
         preprocessing: &ReadWriteMemoryPreprocessing,
@@ -1088,6 +1212,48 @@ where
             program_io,
             opening_accumulator,
             transcript,
+        );
+
+        let timestamp_validity_proof = TimestampValidityProof::prove(
+            generators,
+            &polynomials.timestamp_range_check,
+            polynomials,
+            opening_accumulator,
+            transcript,
+        );
+
+        Self {
+            memory_checking_proof,
+            output_proof,
+            timestamp_validity_proof,
+        }
+    }
+
+    #[tracing::instrument(skip_all, name = "ReadWriteMemoryProof::prove")]
+    pub fn segment_prove<'a>(
+        generators: &PCS::Setup,
+        preprocessing: &ReadWriteMemoryPreprocessing,
+        polynomials: &'a JoltPolynomials<F>,
+        program_io: &JoltDevice,
+        opening_accumulator: &mut ProverOpeningAccumulator<F, ProofTranscript>,
+        transcript: &mut ProofTranscript,
+        is_final_segment: bool,
+    ) -> Self {
+        let memory_checking_proof = ReadWriteMemoryProof::prove_memory_checking(
+            generators,
+            preprocessing,
+            &polynomials.read_write_memory,
+            polynomials,
+            opening_accumulator,
+            transcript,
+        );
+
+        let output_proof = OutputSumcheckProof::segment_prove_outputs(
+            &polynomials.read_write_memory,
+            program_io,
+            opening_accumulator,
+            transcript,
+            is_final_segment
         );
 
         let timestamp_validity_proof = TimestampValidityProof::prove(
