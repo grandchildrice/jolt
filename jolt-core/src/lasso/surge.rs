@@ -843,7 +843,7 @@ mod tests {
             M,
             BatchType::SurgeReadWrite,
         )]);
-        let (_proof, _debug_info) = SurgeProof::<
+        let (proof, debug_info) = SurgeProof::<
             Fr,
             HyperKZG<Bn254, KeccakTranscript>,
             XORInstruction<WORD_SIZE>,
@@ -851,6 +851,8 @@ mod tests {
             M,
             KeccakTranscript,
         >::prove_batch_test(&preprocessing, &generators, ops);
+
+        SurgeProof::verify(&preprocessing, &generators, proof, debug_info).expect("should work");
     }
 
     #[test]
