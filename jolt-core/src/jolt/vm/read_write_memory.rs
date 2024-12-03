@@ -254,8 +254,7 @@ impl<F: JoltField> ReadWriteMemoryPolynomials<F> {
         preprocessing: &ReadWriteMemoryPreprocessing,
         trace: &[JoltTraceStep<InstructionSet>],
 
-        #[cfg(feature = "para")]
-        register_init: Vec<(RegisterNum, RegisterValue)>
+        #[cfg(feature = "para")] register_init: Vec<(RegisterNum, RegisterValue)>,
     ) -> (Self, [Vec<u64>; MEMORY_OPS_PER_INSTRUCTION]) {
         assert!(program_io.inputs.len() <= program_io.memory_layout.max_input_size as usize);
         assert!(program_io.outputs.len() <= program_io.memory_layout.max_output_size as usize);
@@ -274,12 +273,28 @@ impl<F: JoltField> ReadWriteMemoryPolynomials<F> {
 
         let memory_size = max_trace_address.next_power_of_two() as usize;
         let mut v_init: Vec<u64> = vec![0; memory_size];
-        // Cooy regsiger
+        // Copy register
         #[cfg(feature = "para")]
         {
+            let mut f = File::open(filename).expect("file not found");
             // ここにレジスタの値をロードしていく。その時の順番は、Joltの仕様を参照すること。
+            // https://jolt.a16zcrypto.com/how/read_write_memory.html
+            let mut v_init_index = memory_address_to_witness_index(
+                program_io.memory_layout.input_start,
+                &program_io.memory_layout,
+            );
 
+            for chunk in register_init.chunk(32) {
+                let mut word = [0u8; 32];
+                for (i, byte) in chunk.iter().enumerate() {
+                    word[i] = *byte;
+                }
+                let word: u32 = u32::from_le_bytes(word);
+                v_init[v_init_index] = word as u64;
+                v_init_index += 1;
+            }
         }
+
         // Copy bytecode
         let mut v_init_index = memory_address_to_witness_index(
             preprocessing.min_bytecode_address,
