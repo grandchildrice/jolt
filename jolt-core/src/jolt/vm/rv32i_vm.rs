@@ -19,7 +19,6 @@ use strum::{EnumCount, IntoEnumIterator};
 use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
 use std::fs::File;
-use std::io::{self, Write};
 
 use super::{Jolt, JoltCommitments, JoltProof};
 use crate::jolt::instruction::{
@@ -251,8 +250,7 @@ mod tests {
     use crate::field::JoltField;
     use crate::host;
     use crate::jolt::instruction::JoltInstruction;
-    use crate::jolt::vm::rv32i_vm::{Jolt, RV32IJoltVM, C, M, RV32I};
-    use crate::jolt::vm::JoltTraceStep;
+    use crate::jolt::vm::rv32i_vm::{Jolt, RV32IJoltVM, C, M};
     use crate::poly::commitment::commitment_scheme::CommitmentScheme;
     use crate::poly::commitment::hyperkzg::HyperKZG;
     use crate::poly::commitment::hyrax::HyraxScheme;
@@ -320,38 +318,43 @@ mod tests {
                 let (io_device, snapshots, traces) = program.segment_trace();
                 let raw_register_init = snapshots[1].0.clone();
 
-
                 // セグメントごとに分かれているtraceをひとつにし、そのindexを記録しておく。
                 let mut offset: usize = 0;
                 let mut segment_indecies: Vec<(usize, usize)> = Vec::with_capacity(traces.len());
-                let trace = traces.into_iter().map(|trace_segment| {
-                    let start = offset;
-                    offset += trace_segment.len();
-                    let end = offset;
-                    segment_indecies.push((start, end));
-                    
-                    // println!("offset: {:?}", offset);
-                    
-                    trace_segment
-                }).flatten().collect();
+                let trace = traces
+                    .into_iter()
+                    .map(|trace_segment| {
+                        let start = offset;
+                        offset += trace_segment.len();
+                        let end = offset;
+                        segment_indecies.push((start, end));
+
+                        // println!("offset: {:?}", offset);
+
+                        trace_segment
+                    })
+                    .flatten()
+                    .collect();
 
                 println!("segment_indecies: {:?}", segment_indecies);
 
                 // save register_init to a file
-                let encoded = bincode::serialize(&(raw_register_init, segment_indecies[1])).expect("Failed to serialize");
+                let encoded = bincode::serialize(&(raw_register_init, segment_indecies[1]))
+                    .expect("Failed to serialize");
                 let mut file = File::create("tmp_register_init.bin").expect("Failed to create");
                 file.write_all(&encoded).expect("Failed to write");
 
-                let (register_init, segment_indecies): ([i64; 32], (usize, usize)) = bincode::deserialize(&encoded).expect("Failed to deserialize");
+                let (register_init, segment_indecies): ([i64; 32], (usize, usize)) =
+                    bincode::deserialize(&encoded).expect("Failed to deserialize");
                 println!("register_init: {:?}", register_init);
                 println!("segment_indecies: {:?}", segment_indecies);
 
                 (io_device, trace)
             };
             drop(artifact_guard);
-    
+
             let is_final_segment = false;
-    
+
             let preprocessing = RV32IJoltVM::preprocess(
                 bytecode.clone(),
                 io_device.memory_layout.clone(),
@@ -361,13 +364,13 @@ mod tests {
                 1 << 20,
             );
             let (proof, commitments, debug_info) =
-            <RV32IJoltVM as Jolt<F, PCS, C, M, ProofTranscript>>::segment_prove(
-                io_device,
-                trace,
-                preprocessing.clone(),
-                is_final_segment, // セグメントの最後か？ もし最後なら、program_ioのoutputのOutputSumcheckProofで一致を証明する。
-            );
-    
+                <RV32IJoltVM as Jolt<F, PCS, C, M, ProofTranscript>>::segment_prove(
+                    io_device,
+                    trace,
+                    preprocessing.clone(),
+                    is_final_segment, // セグメントの最後か？ もし最後なら、program_ioのoutputのOutputSumcheckProofで一致を証明する。
+                );
+
             let verification_result = if is_final_segment {
                 RV32IJoltVM::verify(preprocessing, proof, commitments, debug_info)
             } else {
@@ -383,7 +386,7 @@ mod tests {
             let (bytecode, memory_init) = program.decode();
             let (io_device, trace) = program.trace();
             drop(artifact_guard);
-    
+
             let preprocessing = RV32IJoltVM::preprocess(
                 bytecode.clone(),
                 io_device.memory_layout.clone(),
@@ -398,7 +401,8 @@ mod tests {
                     trace,
                     preprocessing.clone(),
                 );
-            let verification_result = RV32IJoltVM::verify(preprocessing, proof, commitments, debug_info);
+            let verification_result =
+                RV32IJoltVM::verify(preprocessing, proof, commitments, debug_info);
             assert!(
                 verification_result.is_ok(),
                 "Verification failed with error: {:?}",

@@ -31,11 +31,8 @@ use common::rv_trace::{JoltDevice, MemoryLayout, MemoryOp};
 use super::{timestamp_range_check::TimestampValidityProof, JoltCommitments};
 use super::{JoltPolynomials, JoltStuff, JoltTraceStep};
 
-use serde::Deserialize;
 use std::fs::File;
-use std::io::BufReader;
-use std::io::{self, Read};
-
+use std::io::Read;
 
 #[derive(Clone)]
 pub struct ReadWriteMemoryPreprocessing {
@@ -289,10 +286,11 @@ impl<F: JoltField> ReadWriteMemoryPolynomials<F> {
             let mut f = File::open("tmp_register_init.bin").expect("Failed to open");
             let mut buffer = Vec::new();
             f.read_to_end(&mut buffer).expect("Failed to read");
-            let (register_init, segment_indecies): ([i64; 32], (usize, usize)) = bincode::deserialize(&buffer).expect("Failed to deserialize");
-            
+            let (_register_init, segment_indecies): ([i64; 32], (usize, usize)) =
+                bincode::deserialize(&buffer).expect("Failed to deserialize");
+
             println!("segment_indecies: {:?}", segment_indecies);
-            
+
             let register_init: [u32; 32] = [0u32; 32]; // todo use the register_init loaded from file
 
             let mut v_init_index = 0; // ? registerのindexは0から？
@@ -996,21 +994,21 @@ where
         let r_eq = transcript.challenge_vector(num_rounds);
         let eq: DensePolynomial<F> = DensePolynomial::new(EqPolynomial::evals(&r_eq));
 
-        let input_start_index = memory_address_to_witness_index(
+        let _input_start_index = memory_address_to_witness_index(
             program_io.memory_layout.input_start,
             &program_io.memory_layout,
         ) as u64;
-        let ignore_start_index =
-            memory_address_to_witness_index(
-                if is_final_segment {
-                    RAM_START_ADDRESS
-                } else {
-                    // 最後のセグメント以外は、outputがまだメモリに書き込まれていないので、その部分はチェックしないようにする。
-                    println!("output_startを挿入");
-                    program_io.memory_layout.output_start 
-                },
-                &program_io.memory_layout) as u64;
-        
+        let _ignore_start_index = memory_address_to_witness_index(
+            if is_final_segment {
+                RAM_START_ADDRESS
+            } else {
+                // 最後のセグメント以外は、outputがまだメモリに書き込まれていないので、その部分はチェックしないようにする。
+                println!("output_startを挿入");
+                program_io.memory_layout.output_start
+            },
+            &program_io.memory_layout,
+        ) as u64;
+
         #[cfg(not(feature = "ignore-all-io"))]
         let io_witness_range: Vec<_> = (0..memory_size as u64)
             .map(|i| {
@@ -1021,13 +1019,9 @@ where
                 }
             })
             .collect();
-        
+
         #[cfg(feature = "ignore-all-io")]
-        let io_witness_range: Vec<_> = (0..memory_size as u64)
-            .map(|i| {
-                F::zero()
-            })
-            .collect();
+        let io_witness_range: Vec<_> = (0..memory_size as u64).map(|_i| F::zero()).collect();
 
         let mut v_io: Vec<u64> = vec![0; memory_size];
         // Copy input bytes
@@ -1219,12 +1213,12 @@ where
     ) -> Result<(), ProofVerifyError> {
         let r_eq = transcript.challenge_vector(proof.num_rounds);
 
-        let (sumcheck_claim, r_sumcheck) =
+        let (_sumcheck_claim, r_sumcheck) =
             proof
                 .sumcheck_proof
                 .verify(F::zero(), proof.num_rounds, 3, transcript)?;
 
-        let eq_eval = EqPolynomial::new(r_eq.to_vec()).evaluate(&r_sumcheck);
+        let _eq_eval = EqPolynomial::new(r_eq.to_vec()).evaluate(&r_sumcheck);
 
         let program_io = preprocessing.program_io.as_ref().unwrap();
         let memory_layout = &program_io.memory_layout;
@@ -1241,10 +1235,10 @@ where
         let io_memory_size = ram_start_index as usize;
         let log_io_memory_size = io_memory_size.log_2();
 
-        let output_start_index =
-            memory_address_to_witness_index(
-                program_io.memory_layout.output_start,
-                &program_io.memory_layout);
+        let _output_start_index = memory_address_to_witness_index(
+            program_io.memory_layout.output_start,
+            &program_io.memory_layout,
+        );
 
         let io_witness_range: Vec<_> = (0..io_memory_size)
             .map(|i| {
@@ -1411,7 +1405,7 @@ where
             program_io,
             opening_accumulator,
             transcript,
-            is_final_segment
+            is_final_segment,
         );
 
         let timestamp_validity_proof = TimestampValidityProof::prove(
