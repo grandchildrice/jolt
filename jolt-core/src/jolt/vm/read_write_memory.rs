@@ -31,6 +31,11 @@ use common::rv_trace::{JoltDevice, MemoryLayout, MemoryOp};
 use super::{timestamp_range_check::TimestampValidityProof, JoltCommitments};
 use super::{JoltPolynomials, JoltStuff, JoltTraceStep};
 
+use serde::Deserialize;
+use std::fs::File;
+use std::io::BufReader;
+
+
 #[derive(Clone)]
 pub struct ReadWriteMemoryPreprocessing {
     min_bytecode_address: u64,
@@ -277,6 +282,11 @@ impl<F: JoltField> ReadWriteMemoryPolynomials<F> {
         {
             // ここにレジスタの値をロードしていく。その時の順番は、Joltの仕様を参照すること。
             // https://jolt.a16zcrypto.com/how/read_write_memory.html
+
+            // let f = File::open("tmp_register_init.bin")?;
+            // let mut buffer = Vec::new();
+            // f.read_to_end(&mut buffer)?;
+            // let register_init: [u32; 32] = bincode::deserialize(&buffer).expect("Failed to deserialize");
 
             let register_init: [u32; 32] = [0u32; 32];
 

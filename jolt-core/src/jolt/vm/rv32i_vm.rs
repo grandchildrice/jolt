@@ -18,6 +18,9 @@ use std::any::TypeId;
 use strum::{EnumCount, IntoEnumIterator};
 use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
+use std::fs::File;
+use std::io::{self, Write};
+
 use super::{Jolt, JoltCommitments, JoltProof};
 use crate::jolt::instruction::{
     add::ADDInstruction, and::ANDInstruction, beq::BEQInstruction, bge::BGEInstruction,
@@ -187,7 +190,6 @@ pub type RV32IJoltProof<F, PCS, ProofTranscript> =
 
 use crate::utils::transcript::{KeccakTranscript, Transcript};
 use eyre::Result;
-use std::fs::File;
 use std::io::Cursor;
 use std::path::PathBuf;
 
@@ -243,6 +245,8 @@ mod tests {
     use ark_bn254::{Bn254, Fr, G1Projective};
 
     use std::collections::HashSet;
+    use std::fs::File;
+    use std::io::Write;
 
     use crate::field::JoltField;
     use crate::host;
@@ -313,7 +317,14 @@ mod tests {
             let (bytecode, memory_init) = program.decode();
             let (io_device, trace) = {
                 let (io_device, segmentations) = program.segment_trace();
-                (io_device, segmentations[0].1.clone())
+                let raw_register_init = segmentations[1].0.0.clone();
+
+                // save register_init to a file
+                // let encoded = bincode::serialize(&raw_register_init).expect("Failed to serialize");
+                // let mut file = File::create("config.bin").expect("Failed to create");
+                // file.write_all(&encoded).expect("Failed to write");
+
+                (io_device, segmentations[1].1.clone())
             };
             drop(artifact_guard);
     
