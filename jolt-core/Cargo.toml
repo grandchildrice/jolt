@@ -108,6 +108,7 @@ default = [
     "rayon",
 ]
 host = ["dep:reqwest", "dep:tokio"]
+
 para = ["tracer/trace-segmentation"]
 ignore-all-io = []
 
