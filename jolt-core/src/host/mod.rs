@@ -8,6 +8,7 @@ use std::{
     process::Command,
 };
 
+use itertools::Itertools;
 use postcard;
 use rayon::prelude::*;
 use serde::Serialize;
@@ -15,6 +16,7 @@ use serde::Serialize;
 use common::{
     constants::{
         DEFAULT_MAX_INPUT_SIZE, DEFAULT_MAX_OUTPUT_SIZE, DEFAULT_MEMORY_SIZE, DEFAULT_STACK_SIZE,
+        TRACE_SEGMENTATION_SIZE
     },
     rv_trace::JoltDevice,
 };
@@ -227,47 +229,52 @@ impl Program {
 
     // TODO(moodlezoup): Make this generic over InstructionSet
     #[tracing::instrument(skip_all, name = "Program::trace")]
-    pub fn segment_trace(&mut self) -> (JoltDevice, Vec<JoltTraceStep<RV32I>>) {
+    pub fn segment_trace(&mut self) -> (JoltDevice, Vec<(([i64; 32], Vec<u64>, u64), Vec<JoltTraceStep<RV32I>>)>) {
         self.build();
         let elf = self.elf.clone().unwrap();
         let (raw_trace, io_device, snapshots) =
             tracer::segment_trace(&elf, &self.input, self.max_input_size, self.max_output_size);
+        
+        let segmentations = raw_trace.chunks(TRACE_SEGMENTATION_SIZE as usize).zip(snapshots).map(|(segmented_raw_trace, snapshot)| {
+            let segmented_raw_trace = segmented_raw_trace.to_vec();
+            let trace: Vec<_> = segmented_raw_trace
+                .into_par_iter()
+                .flat_map(|row| match row.instruction.opcode {
+                    tracer::RV32IM::MULH => MULHInstruction::<32>::virtual_trace(row),
+                    tracer::RV32IM::MULHSU => MULHSUInstruction::<32>::virtual_trace(row),
+                    tracer::RV32IM::DIV => DIVInstruction::<32>::virtual_trace(row),
+                    tracer::RV32IM::DIVU => DIVUInstruction::<32>::virtual_trace(row),
+                    tracer::RV32IM::REM => REMInstruction::<32>::virtual_trace(row),
+                    tracer::RV32IM::REMU => REMUInstruction::<32>::virtual_trace(row),
+                    tracer::RV32IM::SH => SHInstruction::<32>::virtual_trace(row),
+                    tracer::RV32IM::SB => SBInstruction::<32>::virtual_trace(row),
+                    tracer::RV32IM::LBU => LBUInstruction::<32>::virtual_trace(row),
+                    tracer::RV32IM::LHU => LHUInstruction::<32>::virtual_trace(row),
+                    tracer::RV32IM::LB => LBInstruction::<32>::virtual_trace(row),
+                    tracer::RV32IM::LH => LHInstruction::<32>::virtual_trace(row),
+                    _ => vec![row],
+                })
+                .map(|row| {
+                    let instruction_lookup = if let Ok(jolt_instruction) = RV32I::try_from(&row) {
+                        Some(jolt_instruction)
+                    } else {
+                        // Instruction does not use lookups
+                        None
+                    };
 
-        let trace: Vec<_> = raw_trace
-            .into_par_iter()
-            .flat_map(|row| match row.instruction.opcode {
-                tracer::RV32IM::MULH => MULHInstruction::<32>::virtual_trace(row),
-                tracer::RV32IM::MULHSU => MULHSUInstruction::<32>::virtual_trace(row),
-                tracer::RV32IM::DIV => DIVInstruction::<32>::virtual_trace(row),
-                tracer::RV32IM::DIVU => DIVUInstruction::<32>::virtual_trace(row),
-                tracer::RV32IM::REM => REMInstruction::<32>::virtual_trace(row),
-                tracer::RV32IM::REMU => REMUInstruction::<32>::virtual_trace(row),
-                tracer::RV32IM::SH => SHInstruction::<32>::virtual_trace(row),
-                tracer::RV32IM::SB => SBInstruction::<32>::virtual_trace(row),
-                tracer::RV32IM::LBU => LBUInstruction::<32>::virtual_trace(row),
-                tracer::RV32IM::LHU => LHUInstruction::<32>::virtual_trace(row),
-                tracer::RV32IM::LB => LBInstruction::<32>::virtual_trace(row),
-                tracer::RV32IM::LH => LHInstruction::<32>::virtual_trace(row),
-                _ => vec![row],
-            })
-            .map(|row| {
-                let instruction_lookup = if let Ok(jolt_instruction) = RV32I::try_from(&row) {
-                    Some(jolt_instruction)
-                } else {
-                    // Instruction does not use lookups
-                    None
-                };
+                    JoltTraceStep {
+                        instruction_lookup,
+                        bytecode_row: BytecodeRow::from_instruction::<RV32I>(&row.instruction),
+                        memory_ops: (&row).into(),
+                        circuit_flags: row.instruction.to_circuit_flags(),
+                    }
+                })
+                .collect();
+            (snapshot, trace)
+        }).collect();
 
-                JoltTraceStep {
-                    instruction_lookup,
-                    bytecode_row: BytecodeRow::from_instruction::<RV32I>(&row.instruction),
-                    memory_ops: (&row).into(),
-                    circuit_flags: row.instruction.to_circuit_flags(),
-                }
-            })
-            .collect();
 
-        (io_device, trace)
+        (io_device, segmentations)
     }
 
     pub fn trace_analyze<F: JoltField>(mut self) -> ProgramSummary {

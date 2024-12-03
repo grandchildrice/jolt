@@ -8,6 +8,7 @@ use std::str::FromStr;
 
 use crate::trace::Tracer;
 use common::rv_trace::*;
+use common::constants::TRACE_SEGMENTATION_SIZE;
 
 use self::fnv::FnvHashMap;
 
@@ -303,7 +304,7 @@ impl Cpu {
 
         #[cfg(feature = "trace-segmentation")]
         {
-            if self.clock % 100 == 0 {
+            if self.clock % TRACE_SEGMENTATION_SIZE == 0 {
                 let register_snapshot = self.x.clone();
                 let ram_snapshot = self.mmu.memory.memory.data.clone();
                 println!("clock: {}, reg: {:?}, ram: {}", self.clock, register_snapshot, ram_snapshot.len());

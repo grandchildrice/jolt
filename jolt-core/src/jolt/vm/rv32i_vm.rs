@@ -307,6 +307,12 @@ mod tests {
         let mut program = host::Program::new("fibonacci-guest");
         program.set_input(&9u32);
         let (bytecode, memory_init) = program.decode();
+        #[cfg(feature = "para")]
+        let (io_device, trace) = {
+            let (io_device, segmentations) = program.segment_trace();
+            (io_device, segmentations[0].1.clone())
+        };
+        #[cfg(not(feature = "para"))]
         let (io_device, trace) = program.trace();
         drop(artifact_guard);
 
