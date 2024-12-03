@@ -273,10 +273,10 @@ impl<F: JoltField> ReadWriteMemoryPolynomials<F> {
 
         let memory_size = max_trace_address.next_power_of_two() as usize;
         let mut v_init: Vec<u64> = vec![0; memory_size];
+        // todo: remove flag and read file
         // Copy register
         #[cfg(feature = "para")]
         {
-            let mut f = File::open(filename).expect("file not found");
             // ここにレジスタの値をロードしていく。その時の順番は、Joltの仕様を参照すること。
             // https://jolt.a16zcrypto.com/how/read_write_memory.html
             let mut v_init_index = memory_address_to_witness_index(

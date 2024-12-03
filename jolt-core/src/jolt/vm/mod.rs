@@ -362,9 +362,8 @@ where
         program_io: JoltDevice,
         mut trace: Vec<JoltTraceStep<Self::InstructionSet>>,
         preprocessing: JoltPreprocessing<C, F, PCS, ProofTranscript>,
-
-        #[cfg(feature = "para")]
-        register_init: Vec<(RegisterNum, RegisterValue)>
+        // todo: remove flag
+        #[cfg(feature = "para")] register_init: Vec<(RegisterNum, RegisterValue)>,
     ) -> (
         JoltProof<
             C,
