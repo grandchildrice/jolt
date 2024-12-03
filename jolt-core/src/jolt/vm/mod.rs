@@ -355,11 +355,16 @@ where
         }
     }
 
+    type RegisterNum = u8;
+    type RegisterValue = [u8; 4];
     #[tracing::instrument(skip_all, name = "Jolt::prove")]
     fn prove(
         program_io: JoltDevice,
         mut trace: Vec<JoltTraceStep<Self::InstructionSet>>,
         preprocessing: JoltPreprocessing<C, F, PCS, ProofTranscript>,
+
+        #[cfg(feature = "para")]
+        register_init: Vec<(RegisterNum, RegisterValue)>
     ) -> (
         JoltProof<
             C,
@@ -403,6 +408,8 @@ where
             &program_io,
             &preprocessing.read_write_memory,
             &trace,
+            #[cfg(feature = "para")]
+            register_init,
         );
 
         let (bytecode_polynomials, range_check_polys) = rayon::join(
