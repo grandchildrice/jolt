@@ -318,6 +318,7 @@ mod tests {
             1 << 20,
             1 << 20,
         );
+        // todo: remove flag
         #[cfg(feature = "para")]
         let (proof, commitments, debug_info) =
             <RV32IJoltVM as Jolt<F, PCS, C, M, ProofTranscript>>::prove(
