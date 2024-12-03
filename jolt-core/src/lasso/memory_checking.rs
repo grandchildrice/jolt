@@ -18,7 +18,7 @@ use crate::{
 
 use crate::field::JoltField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use itertools::interleave;
+use itertools::{concat, interleave};
 use rayon::prelude::*;
 
 #[derive(CanonicalSerialize, CanonicalDeserialize)]
@@ -65,6 +65,28 @@ where
     /// The openings associated with the grand products.
     pub openings: Openings,
     pub exogenous_openings: OtherOpenings,
+}
+
+#[derive(CanonicalSerialize, CanonicalDeserialize)]
+pub struct MemoryCheckingBatchedProof<F, PCS, Openings, OtherOpenings, ProofTranscript>
+where
+    F: JoltField,
+    PCS: CommitmentScheme<ProofTranscript, Field = F>,
+    Openings: StructuredPolynomialData<F> + Sync + CanonicalSerialize + CanonicalDeserialize,
+    OtherOpenings: ExogenousOpenings<F> + Sync,
+    ProofTranscript: Transcript,
+{
+    /// Read/write/init/final multiset hashes for each memory
+    pub multiset_hashes: MultisetHashes<F>,
+    /// The read and write grand products for every memory has the same size,
+    /// so they can be batched.
+    pub read_write_grand_product: BatchedGrandProductProof<PCS, ProofTranscript>,
+    /// The init and final grand products for every memory has the same size,
+    /// so they can be batched.
+    pub init_final_grand_product: BatchedGrandProductProof<PCS, ProofTranscript>,
+    /// The openings associated with the grand products.
+    pub openings: Vec<Openings>,
+    pub exogenous_openings: Vec<OtherOpenings>,
 }
 
 /// This type, used within a `StructuredPolynomialData` struct, indicates that the
@@ -130,7 +152,7 @@ pub trait ExogenousOpenings<F: JoltField>:
     ) -> Vec<&T>;
 }
 
-#[derive(Default, CanonicalSerialize, CanonicalDeserialize)]
+#[derive(Default, Clone, CanonicalSerialize, CanonicalDeserialize)]
 pub struct NoExogenousOpenings;
 impl<F: JoltField> ExogenousOpenings<F> for NoExogenousOpenings {
     fn openings(&self) -> Vec<&F> {
@@ -281,6 +303,71 @@ where
         }
     }
 
+    #[tracing::instrument(skip_all, name = "MemoryCheckingProver::prove_memory_checking_batched")]
+    /// Generates a memory checking proof for the given committed polynomials.
+    fn prove_memory_checking_batched(
+        pcs_setup: &PCS::Setup,
+        preprocessing: &Self::Preprocessing,
+        polynomials: &[Self::Polynomials],
+        jolt_polynomials: &[JoltPolynomials<F>],
+        opening_accumulator: &mut ProverOpeningAccumulator<F, ProofTranscript>,
+        transcript: &mut ProofTranscript,
+    ) -> MemoryCheckingBatchedProof<F, PCS, Self::Openings, Self::ExogenousOpenings, ProofTranscript>
+    {
+        let (
+            read_write_grand_product,
+            init_final_grand_product,
+            multiset_hashes,
+            r_read_write,
+            r_init_final,
+        ) = Self::prove_grand_products_batched(
+            preprocessing,
+            polynomials,
+            jolt_polynomials,
+            opening_accumulator,
+            transcript,
+            pcs_setup,
+        );
+
+        let read_write_batch_size =
+            multiset_hashes.read_hashes.len() + multiset_hashes.write_hashes.len();
+        let init_final_batch_size =
+            multiset_hashes.init_hashes.len() + multiset_hashes.final_hashes.len();
+
+        // For a batch size of k, the first log2(k) elements of `r_read_write`/`r_init_final`
+        // form the point at which the output layer's MLE is evaluated. The remaining elements
+        // then form the point at which the leaf layer's polynomials are evaluated.
+        let (_, r_read_write_opening) =
+            r_read_write.split_at(read_write_batch_size.next_power_of_two().log_2());
+        let (_, r_init_final_opening) =
+            r_init_final.split_at(init_final_batch_size.next_power_of_two().log_2());
+
+        let mut openings = Vec::new();
+        let mut exogenous_openings = Vec::new();
+
+        for (polynomials, jolt_polynomials) in polynomials.iter().zip(jolt_polynomials) {
+            let (openings_single, exogenous_openings_single) = Self::compute_openings(
+                preprocessing,
+                opening_accumulator,
+                polynomials,
+                jolt_polynomials,
+                r_read_write_opening,
+                r_init_final_opening,
+                transcript,
+            );
+            openings.push(openings_single);
+            exogenous_openings.push(exogenous_openings_single);
+        }
+
+        MemoryCheckingBatchedProof {
+            multiset_hashes,
+            read_write_grand_product,
+            init_final_grand_product,
+            openings,
+            exogenous_openings,
+        }
+    }
+
     #[tracing::instrument(skip_all, name = "MemoryCheckingProver::prove_grand_products")]
     /// Proves the grand products for the memory checking multisets (init, read, write, final).
     fn prove_grand_products(
@@ -310,6 +397,89 @@ where
             Self::read_write_grand_product(preprocessing, polynomials, read_write_leaves);
         let (mut init_final_circuit, init_final_hashes) =
             Self::init_final_grand_product(preprocessing, polynomials, init_final_leaves);
+
+        let multiset_hashes =
+            Self::uninterleave_hashes(preprocessing, read_write_hashes, init_final_hashes);
+        Self::check_multiset_equality(preprocessing, &multiset_hashes);
+        multiset_hashes.append_to_transcript(transcript);
+
+        let (read_write_grand_product, r_read_write) = read_write_circuit.prove_grand_product(
+            Some(opening_accumulator),
+            transcript,
+            Some(pcs_setup),
+        );
+        let (init_final_grand_product, r_init_final) = init_final_circuit.prove_grand_product(
+            Some(opening_accumulator),
+            transcript,
+            Some(pcs_setup),
+        );
+
+        drop_in_background_thread(read_write_circuit);
+        drop_in_background_thread(init_final_circuit);
+
+        (
+            read_write_grand_product,
+            init_final_grand_product,
+            multiset_hashes,
+            r_read_write,
+            r_init_final,
+        )
+    }
+
+    #[tracing::instrument(skip_all, name = "MemoryCheckingProver::prove_grand_products")]
+    /// Proves the grand products for the memory checking multisets (init, read, write, final).
+    fn prove_grand_products_batched(
+        preprocessing: &Self::Preprocessing,
+        polynomials_array: &[Self::Polynomials],
+        jolt_polynomials_array: &[JoltPolynomials<F>],
+        opening_accumulator: &mut ProverOpeningAccumulator<F, ProofTranscript>,
+        transcript: &mut ProofTranscript,
+        pcs_setup: &PCS::Setup,
+    ) -> (
+        BatchedGrandProductProof<PCS, ProofTranscript>,
+        BatchedGrandProductProof<PCS, ProofTranscript>,
+        MultisetHashes<F>,
+        Vec<F>,
+        Vec<F>,
+    ) {
+        // Fiat-Shamir randomness for multiset hashes
+        let gamma: F = transcript.challenge_scalar();
+        let tau: F = transcript.challenge_scalar();
+
+        let protocol_name = Self::protocol_name();
+        transcript.append_message(protocol_name);
+
+        let mut read_write_leaves_singles = Vec::new();
+        let mut init_final_leaves_singles = Vec::new();
+        for (polynomials, jolt_polynomials) in polynomials_array.iter().zip(jolt_polynomials_array)
+        {
+            let (read_write_leaves_single, init_final_leaves_single) =
+                Self::compute_leaves(preprocessing, polynomials, jolt_polynomials, &gamma, &tau);
+            read_write_leaves_singles.push(read_write_leaves_single);
+            init_final_leaves_singles.push(init_final_leaves_single);
+        }
+
+        let read_write_leaves = <Self::ReadWriteGrandProduct as BatchedGrandProduct<
+            F,
+            PCS,
+            ProofTranscript,
+        >>::concat_leaves(&read_write_leaves_singles);
+        let init_final_leaves = <Self::InitFinalGrandProduct as BatchedGrandProduct<
+            F,
+            PCS,
+            ProofTranscript,
+        >>::concat_leaves(&init_final_leaves_singles);
+
+        let (mut read_write_circuit, read_write_hashes) = Self::read_write_grand_product_batched(
+            preprocessing,
+            polynomials_array,
+            read_write_leaves,
+        );
+        let (mut init_final_circuit, init_final_hashes) = Self::init_final_grand_product_batched(
+            preprocessing,
+            polynomials_array,
+            init_final_leaves,
+        );
 
         let multiset_hashes =
             Self::uninterleave_hashes(preprocessing, read_write_hashes, init_final_hashes);
@@ -419,12 +589,42 @@ where
         (batched_circuit, claims)
     }
 
+    #[tracing::instrument(skip_all, name = "MemoryCheckingProver::read_write_grand_product")]
+    fn read_write_grand_product_batched(
+        _preprocessing: &Self::Preprocessing,
+        _polynomials_array: &[Self::Polynomials],
+        read_write_leaves: <Self::ReadWriteGrandProduct as BatchedGrandProduct<
+            F,
+            PCS,
+            ProofTranscript,
+        >>::Leaves,
+    ) -> (Self::ReadWriteGrandProduct, Vec<F>) {
+        let batched_circuit = Self::ReadWriteGrandProduct::construct(read_write_leaves);
+        let claims = batched_circuit.claimed_outputs();
+        (batched_circuit, claims)
+    }
+
     /// Constructs a batched grand product circuit for the init and final multisets associated
     /// with the given leaves. Also returns the corresponding multiset hashes for each memory.
     #[tracing::instrument(skip_all, name = "MemoryCheckingProver::init_final_grand_product")]
     fn init_final_grand_product(
         _preprocessing: &Self::Preprocessing,
         _polynomials: &Self::Polynomials,
+        init_final_leaves: <Self::InitFinalGrandProduct as BatchedGrandProduct<
+            F,
+            PCS,
+            ProofTranscript,
+        >>::Leaves,
+    ) -> (Self::InitFinalGrandProduct, Vec<F>) {
+        let batched_circuit = Self::InitFinalGrandProduct::construct(init_final_leaves);
+        let claims = batched_circuit.claimed_outputs();
+        (batched_circuit, claims)
+    }
+
+    #[tracing::instrument(skip_all, name = "MemoryCheckingProver::init_final_grand_product")]
+    fn init_final_grand_product_batched(
+        _preprocessing: &Self::Preprocessing,
+        _polynomials_array: &[Self::Polynomials],
         init_final_leaves: <Self::InitFinalGrandProduct as BatchedGrandProduct<
             F,
             PCS,
