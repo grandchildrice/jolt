@@ -362,8 +362,6 @@ where
         program_io: JoltDevice,
         mut trace: Vec<JoltTraceStep<Self::InstructionSet>>,
         preprocessing: JoltPreprocessing<C, F, PCS, ProofTranscript>,
-        // todo: remove flag
-        #[cfg(feature = "para")] register_init: Vec<(RegisterNum, RegisterValue)>,
     ) -> (
         JoltProof<
             C,
@@ -407,8 +405,6 @@ where
             &program_io,
             &preprocessing.read_write_memory,
             &trace,
-            #[cfg(feature = "para")]
-            register_init,
         );
 
         let (bytecode_polynomials, range_check_polys) = rayon::join(
@@ -493,6 +489,183 @@ where
             &program_io,
             &mut opening_accumulator,
             &mut transcript,
+        );
+
+        let spartan_proof = UniformSpartanProof::<
+            C,
+            <Self::Constraints as R1CSConstraints<C, F>>::Inputs,
+            F,
+            ProofTranscript,
+        >::prove::<PCS>(
+            &r1cs_builder,
+            &spartan_key,
+            &jolt_polynomials,
+            &mut opening_accumulator,
+            &mut transcript,
+        )
+        .expect("r1cs proof failed");
+
+        // Batch-prove all openings
+        let opening_proof =
+            opening_accumulator.reduce_and_prove::<PCS>(&preprocessing.generators, &mut transcript);
+
+        drop_in_background_thread(jolt_polynomials);
+
+        let jolt_proof = JoltProof {
+            trace_length,
+            program_io,
+            bytecode: bytecode_proof,
+            read_write_memory: memory_proof,
+            instruction_lookups: instruction_proof,
+            r1cs: spartan_proof,
+            opening_proof,
+        };
+
+        #[cfg(test)]
+        let debug_info = Some(ProverDebugInfo {
+            transcript,
+            opening_accumulator,
+        });
+        #[cfg(not(test))]
+        let debug_info = None;
+        (jolt_proof, jolt_commitments, debug_info)
+    }
+
+
+    #[tracing::instrument(skip_all, name = "Jolt::prove")]
+    fn segment_prove(
+        program_io: JoltDevice,
+        mut trace: Vec<JoltTraceStep<Self::InstructionSet>>,
+        preprocessing: JoltPreprocessing<C, F, PCS, ProofTranscript>,
+        is_final_segment: bool,
+    ) -> (
+        JoltProof<
+            C,
+            M,
+            <Self::Constraints as R1CSConstraints<C, F>>::Inputs,
+            F,
+            PCS,
+            Self::InstructionSet,
+            Self::Subtables,
+            ProofTranscript,
+        >,
+        JoltCommitments<PCS, ProofTranscript>,
+        Option<ProverDebugInfo<F, ProofTranscript>>,
+    ) {
+        let trace_length = trace.len();
+        let padded_trace_length = trace_length.next_power_of_two();
+        println!("Trace length: {}", trace_length);
+
+        JoltTraceStep::pad(&mut trace);
+
+        let mut transcript = ProofTranscript::new(b"Jolt transcript");
+        Self::fiat_shamir_preamble(
+            &mut transcript,
+            &program_io,
+            &program_io.memory_layout,
+            trace_length,
+        );
+
+        let instruction_polynomials =
+            InstructionLookupsProof::<
+                C,
+                M,
+                F,
+                PCS,
+                Self::InstructionSet,
+                Self::Subtables,
+                ProofTranscript,
+            >::generate_witness(&preprocessing.instruction_lookups, &trace);
+
+        let (memory_polynomials, read_timestamps) = ReadWriteMemoryPolynomials::generate_witness(
+            &program_io,
+            &preprocessing.read_write_memory,
+            &trace,
+        );
+
+        let (bytecode_polynomials, range_check_polys) = rayon::join(
+            || {
+                BytecodeProof::<F, PCS, ProofTranscript>::generate_witness(
+                    &preprocessing.bytecode,
+                    &mut trace,
+                )
+            },
+            || {
+                TimestampValidityProof::<F, PCS, ProofTranscript>::generate_witness(
+                    &read_timestamps,
+                )
+            },
+        );
+
+        let r1cs_builder = Self::Constraints::construct_constraints(
+            padded_trace_length,
+            program_io.memory_layout.input_start,
+        );
+        let spartan_key = spartan::UniformSpartanProof::<
+            C,
+            <Self::Constraints as R1CSConstraints<C, F>>::Inputs,
+            F,
+            ProofTranscript,
+        >::setup(&r1cs_builder, padded_trace_length);
+
+        let r1cs_polynomials = R1CSPolynomials::new::<
+            C,
+            M,
+            Self::InstructionSet,
+            <Self::Constraints as R1CSConstraints<C, F>>::Inputs,
+        >(&trace);
+
+        let mut jolt_polynomials = JoltPolynomials {
+            bytecode: bytecode_polynomials,
+            read_write_memory: memory_polynomials,
+            timestamp_range_check: range_check_polys,
+            instruction_lookups: instruction_polynomials,
+            r1cs: r1cs_polynomials,
+        };
+
+        r1cs_builder.compute_aux(&mut jolt_polynomials);
+
+        let jolt_commitments = jolt_polynomials.commit::<C, PCS, ProofTranscript>(&preprocessing);
+
+        transcript.append_scalar(&spartan_key.vk_digest);
+
+        jolt_commitments
+            .read_write_values()
+            .iter()
+            .for_each(|value| value.append_to_transcript(&mut transcript));
+        jolt_commitments
+            .init_final_values()
+            .iter()
+            .for_each(|value| value.append_to_transcript(&mut transcript));
+
+        let mut opening_accumulator: ProverOpeningAccumulator<F, ProofTranscript> =
+            ProverOpeningAccumulator::new();
+
+        let bytecode_proof = BytecodeProof::prove_memory_checking(
+            &preprocessing.generators,
+            &preprocessing.bytecode,
+            &jolt_polynomials.bytecode,
+            &jolt_polynomials,
+            &mut opening_accumulator,
+            &mut transcript,
+        );
+
+        let instruction_proof = InstructionLookupsProof::prove(
+            &preprocessing.generators,
+            &jolt_polynomials,
+            &preprocessing.instruction_lookups,
+            &mut opening_accumulator,
+            &mut transcript,
+        );
+
+        let memory_proof = ReadWriteMemoryProof::segment_prove(
+            &preprocessing.generators,
+            &preprocessing.read_write_memory,
+            &jolt_polynomials,
+            &program_io,
+            &mut opening_accumulator,
+            &mut transcript,
+            is_final_segment,
         );
 
         let spartan_proof = UniformSpartanProof::<
@@ -637,6 +810,109 @@ where
         Ok(())
     }
 
+
+    #[tracing::instrument(skip_all)]
+    fn segment_verify(
+        mut preprocessing: JoltPreprocessing<C, F, PCS, ProofTranscript>,
+        proof: JoltProof<
+            C,
+            M,
+            <Self::Constraints as R1CSConstraints<C, F>>::Inputs,
+            F,
+            PCS,
+            Self::InstructionSet,
+            Self::Subtables,
+            ProofTranscript,
+        >,
+        commitments: JoltCommitments<PCS, ProofTranscript>,
+        _debug_info: Option<ProverDebugInfo<F, ProofTranscript>>,
+    ) -> Result<(), ProofVerifyError> {
+        let mut transcript = ProofTranscript::new(b"Jolt transcript");
+        let mut opening_accumulator: VerifierOpeningAccumulator<F, PCS, ProofTranscript> =
+            VerifierOpeningAccumulator::new();
+
+        #[cfg(test)]
+        if let Some(debug_info) = _debug_info {
+            transcript.compare_to(debug_info.transcript);
+            opening_accumulator
+                .compare_to(debug_info.opening_accumulator, &preprocessing.generators);
+        }
+        Self::fiat_shamir_preamble(
+            &mut transcript,
+            &proof.program_io,
+            &preprocessing.memory_layout,
+            proof.trace_length,
+        );
+
+        // Regenerate the uniform Spartan key
+        let padded_trace_length = proof.trace_length.next_power_of_two();
+        let memory_start = preprocessing.memory_layout.input_start;
+        let r1cs_builder =
+            Self::Constraints::construct_constraints(padded_trace_length, memory_start);
+        let spartan_key = spartan::UniformSpartanProof::<C, _, F, ProofTranscript>::setup(
+            &r1cs_builder,
+            padded_trace_length,
+        );
+        transcript.append_scalar(&spartan_key.vk_digest);
+
+        let r1cs_proof = R1CSProof {
+            key: spartan_key,
+            proof: proof.r1cs,
+            _marker: PhantomData,
+        };
+
+        commitments
+            .read_write_values()
+            .iter()
+            .for_each(|value| value.append_to_transcript(&mut transcript));
+        commitments
+            .init_final_values()
+            .iter()
+            .for_each(|value| value.append_to_transcript(&mut transcript));
+
+        Self::verify_bytecode(
+            &preprocessing.bytecode,
+            &preprocessing.generators,
+            proof.bytecode,
+            &commitments,
+            &mut opening_accumulator,
+            &mut transcript,
+        )?;
+        Self::verify_instruction_lookups(
+            &preprocessing.instruction_lookups,
+            &preprocessing.generators,
+            proof.instruction_lookups,
+            &commitments,
+            &mut opening_accumulator,
+            &mut transcript,
+        )?;
+        Self::segment_verify_memory(
+            &mut preprocessing.read_write_memory,
+            &preprocessing.generators,
+            &preprocessing.memory_layout,
+            proof.read_write_memory,
+            &commitments,
+            proof.program_io,
+            &mut opening_accumulator,
+            &mut transcript,
+        )?;
+        Self::verify_r1cs(
+            r1cs_proof,
+            &commitments,
+            &mut opening_accumulator,
+            &mut transcript,
+        )?;
+
+        // Batch-verify all openings
+        opening_accumulator.reduce_and_verify(
+            &preprocessing.generators,
+            &proof.opening_proof,
+            &mut transcript,
+        )?;
+
+        Ok(())
+    }
+
     #[tracing::instrument(skip_all)]
     fn verify_instruction_lookups<'a>(
         preprocessing: &InstructionLookupsPreprocessing<C, F>,
@@ -707,6 +983,38 @@ where
         });
 
         ReadWriteMemoryProof::verify(
+            proof,
+            generators,
+            preprocessing,
+            commitment,
+            opening_accumulator,
+            transcript,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[tracing::instrument(skip_all)]
+    fn segment_verify_memory<'a>(
+        preprocessing: &mut ReadWriteMemoryPreprocessing,
+        generators: &PCS::Setup,
+        memory_layout: &MemoryLayout,
+        proof: ReadWriteMemoryProof<F, PCS, ProofTranscript>,
+        commitment: &'a JoltCommitments<PCS, ProofTranscript>,
+        program_io: JoltDevice,
+        opening_accumulator: &mut VerifierOpeningAccumulator<F, PCS, ProofTranscript>,
+        transcript: &mut ProofTranscript,
+    ) -> Result<(), ProofVerifyError> {
+        assert!(program_io.inputs.len() <= memory_layout.max_input_size as usize);
+        assert!(program_io.outputs.len() <= memory_layout.max_output_size as usize);
+        // pair the memory layout with the program io from the proof
+        preprocessing.program_io = Some(JoltDevice {
+            inputs: program_io.inputs,
+            outputs: program_io.outputs,
+            panic: program_io.panic,
+            memory_layout: memory_layout.clone(),
+        });
+
+        ReadWriteMemoryProof::segment_verify(
             proof,
             generators,
             preprocessing,

@@ -3594,6 +3594,7 @@ dependencies = [
  "common",
  "fnv",
  "object 0.32.2",
+ "tempfile",
  "tracing",
 ]
 

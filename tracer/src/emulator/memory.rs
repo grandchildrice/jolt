@@ -1,7 +1,7 @@
 /// Emulates main memory.
 pub struct Memory {
     /// Memory content
-    data: Vec<u64>,
+    pub(crate) data: Vec<u64>,
 }
 
 impl Memory {
