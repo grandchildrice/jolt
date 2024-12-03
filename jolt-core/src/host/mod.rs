@@ -229,14 +229,15 @@ impl Program {
 
     // TODO(moodlezoup): Make this generic over InstructionSet
     #[tracing::instrument(skip_all, name = "Program::trace")]
-    pub fn segment_trace(&mut self) -> (JoltDevice, Vec<(([i64; 32], Vec<u64>, u64), Vec<JoltTraceStep<RV32I>>)>) {
+    pub fn segment_trace(&mut self) -> (JoltDevice, Vec<([i64; 32], Vec<u64>, u64)>, Vec<Vec<JoltTraceStep<RV32I>>>) {
         self.build();
         let elf = self.elf.clone().unwrap();
         let (raw_trace, io_device, snapshots) =
             tracer::segment_trace(&elf, &self.input, self.max_input_size, self.max_output_size);
         
-        let segmentations = raw_trace.chunks(TRACE_SEGMENTATION_SIZE as usize).zip(snapshots).map(|(segmented_raw_trace, snapshot)| {
+        let traces = raw_trace.chunks(TRACE_SEGMENTATION_SIZE as usize).map(|segmented_raw_trace| {
             let segmented_raw_trace = segmented_raw_trace.to_vec();
+            println!("segmented_raw_trace len: {}", segmented_raw_trace.len());
             let trace: Vec<_> = segmented_raw_trace
                 .into_par_iter()
                 .flat_map(|row| match row.instruction.opcode {
@@ -270,11 +271,11 @@ impl Program {
                     }
                 })
                 .collect();
-            (snapshot, trace)
+            trace
         }).collect();
 
 
-        (io_device, segmentations)
+        (io_device, snapshots, traces)
     }
 
     pub fn trace_analyze<F: JoltField>(mut self) -> ProgramSummary {

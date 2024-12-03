@@ -34,6 +34,7 @@ use super::{JoltPolynomials, JoltStuff, JoltTraceStep};
 use serde::Deserialize;
 use std::fs::File;
 use std::io::BufReader;
+use std::io::{self, Read};
 
 
 #[derive(Clone)]
@@ -279,32 +280,39 @@ impl<F: JoltField> ReadWriteMemoryPolynomials<F> {
         // todo: remove flag and read file
         // Copy register
         #[cfg(feature = "para")]
-        {
+        let trace = {
             // ここにレジスタの値をロードしていく。その時の順番は、Joltの仕様を参照すること。
             // https://jolt.a16zcrypto.com/how/read_write_memory.html
 
-            // let f = File::open("tmp_register_init.bin")?;
-            // let mut buffer = Vec::new();
-            // f.read_to_end(&mut buffer)?;
-            // let register_init: [u32; 32] = bincode::deserialize(&buffer).expect("Failed to deserialize");
+            println!("in para cfg: trace len: {}", trace.len());
 
-            let register_init: [u32; 32] = [0u32; 32];
+            let mut f = File::open("tmp_register_init.bin").expect("Failed to open");
+            let mut buffer = Vec::new();
+            f.read_to_end(&mut buffer).expect("Failed to read");
+            let (register_init, segment_indecies): ([i64; 32], (usize, usize)) = bincode::deserialize(&buffer).expect("Failed to deserialize");
+            
+            println!("segment_indecies: {:?}", segment_indecies);
+            
+            let register_init: [u32; 32] = [0u32; 32]; // todo use the register_init loaded from file
 
-            let mut v_init_index = memory_address_to_witness_index(
-                program_io.memory_layout.input_start,
-                &program_io.memory_layout,
-            );
+            let mut v_init_index = 0; // ? registerのindexは0から？
+            println!("v_init len: {}", v_init.len());
 
-            for word in register_init {
+            for (i, word) in register_init.into_iter().enumerate() {
                 // let mut word = [0u8; 32];
                 // for (i, byte) in reg.iter().enumerate() {
                 //     word[i] = *byte;
                 // }
                 // let word: u32 = u32::from_le_bytes(word);
+                println!("reg {i}");
                 v_init[v_init_index] = word as u64;
                 v_init_index += 1;
             }
-        }
+
+            trace[segment_indecies.0..segment_indecies.1].to_vec()
+        };
+
+        println!("trace len: {}", trace.len());
 
         // Copy bytecode
         let mut v_init_index = memory_address_to_witness_index(

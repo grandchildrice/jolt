@@ -251,7 +251,8 @@ mod tests {
     use crate::field::JoltField;
     use crate::host;
     use crate::jolt::instruction::JoltInstruction;
-    use crate::jolt::vm::rv32i_vm::{Jolt, RV32IJoltVM, C, M};
+    use crate::jolt::vm::rv32i_vm::{Jolt, RV32IJoltVM, C, M, RV32I};
+    use crate::jolt::vm::JoltTraceStep;
     use crate::poly::commitment::commitment_scheme::CommitmentScheme;
     use crate::poly::commitment::hyperkzg::HyperKZG;
     use crate::poly::commitment::hyrax::HyraxScheme;
@@ -316,15 +317,36 @@ mod tests {
         if segmentation_enable {
             let (bytecode, memory_init) = program.decode();
             let (io_device, trace) = {
-                let (io_device, segmentations) = program.segment_trace();
-                let raw_register_init = segmentations[1].0.0.clone();
+                let (io_device, snapshots, traces) = program.segment_trace();
+                let raw_register_init = snapshots[1].0.clone();
+
+
+                // セグメントごとに分かれているtraceをひとつにし、そのindexを記録しておく。
+                let mut offset: usize = 0;
+                let mut segment_indecies: Vec<(usize, usize)> = Vec::with_capacity(traces.len());
+                let trace = traces.into_iter().map(|trace_segment| {
+                    let start = offset;
+                    offset += trace_segment.len();
+                    let end = offset;
+                    segment_indecies.push((start, end));
+                    
+                    // println!("offset: {:?}", offset);
+                    
+                    trace_segment
+                }).flatten().collect();
+
+                println!("segment_indecies: {:?}", segment_indecies);
 
                 // save register_init to a file
-                // let encoded = bincode::serialize(&raw_register_init).expect("Failed to serialize");
-                // let mut file = File::create("config.bin").expect("Failed to create");
-                // file.write_all(&encoded).expect("Failed to write");
+                let encoded = bincode::serialize(&(raw_register_init, segment_indecies[1])).expect("Failed to serialize");
+                let mut file = File::create("tmp_register_init.bin").expect("Failed to create");
+                file.write_all(&encoded).expect("Failed to write");
 
-                (io_device, segmentations[1].1.clone())
+                let (register_init, segment_indecies): ([i64; 32], (usize, usize)) = bincode::deserialize(&encoded).expect("Failed to deserialize");
+                println!("register_init: {:?}", register_init);
+                println!("segment_indecies: {:?}", segment_indecies);
+
+                (io_device, trace)
             };
             drop(artifact_guard);
     
