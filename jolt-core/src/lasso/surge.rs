@@ -11,7 +11,7 @@ use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterato
 use std::marker::{PhantomData, Sync};
 
 use super::memory_checking::{
-    self, Initializable, MemoryCheckingBatchedProof, NoExogenousOpenings, StructuredPolynomialData,
+    Initializable, MemoryCheckingBatchedProof, NoExogenousOpenings, StructuredPolynomialData,
     VerifierComputedOpening,
 };
 use crate::{
@@ -326,6 +326,25 @@ where
         MemoryCheckingProof<F, PCS, SurgeOpenings<F>, NoExogenousOpenings, ProofTranscript>,
 }
 
+#[allow(clippy::type_complexity)]
+pub struct SurgeBatchedProof<F, PCS, Instruction, const C: usize, const M: usize, ProofTranscript>
+where
+    F: JoltField,
+    PCS: CommitmentScheme<ProofTranscript, Field = F>,
+    Instruction: JoltInstruction + Default,
+    ProofTranscript: Transcript,
+{
+    _instruction: PhantomData<Instruction>,
+    /// Commitments to all polynomials
+    commitments: SurgeCommitments<PCS, ProofTranscript>,
+
+    /// Primary collation sumcheck proof
+    primary_sumcheck: SurgePrimarySumcheck<F, ProofTranscript>,
+
+    memory_checking:
+        MemoryCheckingBatchedProof<F, PCS, SurgeOpenings<F>, NoExogenousOpenings, ProofTranscript>,
+}
+
 impl<F, Instruction, const C: usize, const M: usize> SurgePreprocessing<F, Instruction, C, M>
 where
     F: JoltField,
@@ -497,7 +516,10 @@ where
         preprocessing: &SurgePreprocessing<F, Instruction, C, M>,
         generators: &PCS::Setup,
         ops: Vec<Instruction>,
-    ) -> (Self, Option<ProverDebugInfo<F, ProofTranscript>>) {
+    ) -> (
+        SurgeBatchedProof<F, PCS, Instruction, C, M, ProofTranscript>,
+        Option<ProverDebugInfo<F, ProofTranscript>>,
+    ) {
         let mut transcript = ProofTranscript::new(b"Surge transcript");
         let mut opening_accumulator: ProverOpeningAccumulator<F, ProofTranscript> =
             ProverOpeningAccumulator::new();
@@ -571,7 +593,7 @@ where
             _marker: PhantomData,
         };
 
-        let memory_batched_checking = SurgeProof::prove_memory_checking_batched(
+        let memory_checking = SurgeProof::prove_memory_checking_batched(
             generators,
             preprocessing,
             &[polynomials.clone(), polynomials],
@@ -580,15 +602,7 @@ where
             &mut transcript,
         );
 
-        let memory_checking = MemoryCheckingProof {
-            multiset_hashes: memory_batched_checking.multiset_hashes,
-            read_write_grand_product: memory_batched_checking.read_write_grand_product,
-            init_final_grand_product: memory_batched_checking.init_final_grand_product,
-            openings: memory_batched_checking.openings[0].clone(),
-            exogenous_openings: memory_batched_checking.exogenous_openings[0].clone(),
-        };
-
-        let proof = SurgeProof {
+        let proof = SurgeBatchedProof {
             _instruction: PhantomData,
             commitments,
             primary_sumcheck,
@@ -668,6 +682,65 @@ where
         );
 
         Self::verify_memory_checking(
+            preprocessing,
+            generators,
+            proof.memory_checking,
+            &proof.commitments,
+            &JoltCommitments::<PCS, ProofTranscript>::default(),
+            &mut opening_accumulator,
+            &mut transcript,
+        )
+    }
+
+    pub fn verify_batch(
+        preprocessing: &SurgePreprocessing<F, Instruction, C, M>,
+        generators: &PCS::Setup,
+        proof: SurgeBatchedProof<F, PCS, Instruction, C, M, ProofTranscript>,
+        _debug_info: Option<ProverDebugInfo<F, ProofTranscript>>,
+    ) -> Result<(), ProofVerifyError> {
+        let mut transcript = ProofTranscript::new(b"Surge transcript");
+        let mut opening_accumulator: VerifierOpeningAccumulator<F, PCS, ProofTranscript> =
+            VerifierOpeningAccumulator::new();
+        #[cfg(test)]
+        if let Some(debug_info) = _debug_info {
+            transcript.compare_to(debug_info.transcript);
+            opening_accumulator.compare_to(debug_info.opening_accumulator, &generators);
+        }
+
+        let protocol_name = Self::protocol_name();
+        transcript.append_message(protocol_name);
+        let instruction = Instruction::default();
+
+        let r_primary_sumcheck = transcript.challenge_vector(proof.primary_sumcheck.num_rounds);
+
+        transcript.append_scalar(&proof.primary_sumcheck.claimed_evaluation);
+        let primary_sumcheck_poly_degree = instruction.g_poly_degree(C) + 1;
+        let (claim_last, r_z) = proof.primary_sumcheck.sumcheck_proof.verify(
+            proof.primary_sumcheck.claimed_evaluation,
+            proof.primary_sumcheck.num_rounds,
+            primary_sumcheck_poly_degree,
+            &mut transcript,
+        )?;
+
+        let eq_eval = EqPolynomial::new(r_primary_sumcheck.to_vec()).evaluate(&r_z);
+        assert_eq!(
+            eq_eval * instruction.combine_lookups(&proof.primary_sumcheck.E_poly_openings, C, M),
+            claim_last,
+            "Primary sumcheck check failed."
+        );
+
+        opening_accumulator.append(
+            &proof.commitments.E_polys.iter().collect::<Vec<_>>(),
+            r_z.clone(),
+            &proof
+                .primary_sumcheck
+                .E_poly_openings
+                .iter()
+                .collect::<Vec<_>>(),
+            &mut transcript,
+        );
+
+        Self::verify_memory_checking_batched(
             preprocessing,
             generators,
             proof.memory_checking,
@@ -852,7 +925,7 @@ mod tests {
             M,
             BatchType::SurgeReadWrite,
         )]);
-        let (_proof, _debug_info) = SurgeProof::<
+        let (proof, debug_info) = SurgeProof::<
             Fr,
             HyperKZG<Bn254, KeccakTranscript>,
             XORInstruction<WORD_SIZE>,
@@ -860,6 +933,9 @@ mod tests {
             M,
             KeccakTranscript,
         >::prove_batch_test(&preprocessing, &generators, ops);
+
+        SurgeProof::verify_batch(&preprocessing, &generators, proof, debug_info)
+            .expect("should work");
     }
 
     #[test]

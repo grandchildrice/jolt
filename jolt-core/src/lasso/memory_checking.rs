@@ -18,7 +18,7 @@ use crate::{
 
 use crate::field::JoltField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use itertools::{concat, interleave};
+use itertools::interleave;
 use rayon::prelude::*;
 
 #[derive(CanonicalSerialize, CanonicalDeserialize)]
@@ -831,6 +831,112 @@ where
             &gamma,
             &tau,
         );
+
+        Ok(())
+    }
+
+    fn verify_memory_checking_batched(
+        preprocessing: &Self::Preprocessing,
+        pcs_setup: &PCS::Setup,
+        mut proof: MemoryCheckingBatchedProof<
+            F,
+            PCS,
+            Self::Openings,
+            Self::ExogenousOpenings,
+            ProofTranscript,
+        >,
+        commitments: &Self::Commitments,
+        jolt_commitments: &JoltCommitments<PCS, ProofTranscript>,
+        opening_accumulator: &mut VerifierOpeningAccumulator<F, PCS, ProofTranscript>,
+        transcript: &mut ProofTranscript,
+    ) -> Result<(), ProofVerifyError> {
+        // Fiat-Shamir randomness for multiset hashes
+        let gamma: F = transcript.challenge_scalar();
+        let tau: F = transcript.challenge_scalar();
+
+        let protocol_name = Self::protocol_name();
+        transcript.append_message(protocol_name);
+
+        Self::check_multiset_equality(preprocessing, &proof.multiset_hashes);
+        proof.multiset_hashes.append_to_transcript(transcript);
+
+        let (read_write_hashes, init_final_hashes) = Self::interleave(
+            preprocessing,
+            &proof.multiset_hashes.read_hashes,
+            &proof.multiset_hashes.write_hashes,
+            &proof.multiset_hashes.init_hashes,
+            &proof.multiset_hashes.final_hashes,
+        );
+
+        let read_write_batch_size = read_write_hashes.len();
+        let (read_write_claim, r_read_write) = Self::ReadWriteGrandProduct::verify_grand_product(
+            &proof.read_write_grand_product,
+            &read_write_hashes,
+            Some(opening_accumulator),
+            transcript,
+            Some(pcs_setup),
+        );
+        // For a batch size of k, the first log2(k) elements of `r_read_write`/`r_init_final`
+        // form the point at which the output layer's MLE is evaluated. The remaining elements
+        // then form the point at which the leaf layer's polynomials are evaluated.
+        let (r_read_write_batch_index, r_read_write_opening) =
+            r_read_write.split_at(read_write_batch_size.next_power_of_two().log_2());
+
+        let init_final_batch_size = init_final_hashes.len();
+        let (init_final_claim, r_init_final) = Self::InitFinalGrandProduct::verify_grand_product(
+            &proof.init_final_grand_product,
+            &init_final_hashes,
+            Some(opening_accumulator),
+            transcript,
+            Some(pcs_setup),
+        );
+        let (r_init_final_batch_index, r_init_final_opening) =
+            r_init_final.split_at(init_final_batch_size.next_power_of_two().log_2());
+
+        let read_write_commits: Vec<_> = [
+            commitments.read_write_values(),
+            Self::ExogenousOpenings::exogenous_data(jolt_commitments),
+        ]
+        .concat();
+
+        for (openings, exogenous_openings) in
+            proof.openings.iter().zip(proof.exogenous_openings.iter())
+        {
+            let read_write_claims: Vec<_> =
+                [openings.read_write_values(), exogenous_openings.openings()].concat();
+            opening_accumulator.append(
+                &read_write_commits,
+                r_read_write_opening.to_vec(),
+                &read_write_claims,
+                transcript,
+            );
+
+            opening_accumulator.append(
+                &commitments.init_final_values(),
+                r_init_final_opening.to_vec(),
+                &openings.init_final_values(),
+                transcript,
+            );
+
+            // Self::compute_verifier_openings(
+            //     &mut openings,
+            //     preprocessing,
+            //     r_read_write_opening,
+            //     r_init_final_opening,
+            // );
+
+            Self::check_fingerprints(
+                preprocessing,
+                read_write_claim,
+                init_final_claim,
+                r_read_write_batch_index,
+                r_init_final_batch_index,
+                &openings,
+                &exogenous_openings,
+                &gamma,
+                &tau,
+            );
+        }
 
         Ok(())
     }
