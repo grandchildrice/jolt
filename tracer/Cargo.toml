@@ -19,5 +19,9 @@ edition = "2021"
 fnv = "1.0.7"
 object = "0.32.1"
 tracing = "0.1.37"
+tempfile = "3.5"
 
 common = { path = "../common" }
+
+[features]
+trace-segmentation = []
