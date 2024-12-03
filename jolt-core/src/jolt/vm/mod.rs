@@ -362,8 +362,6 @@ where
         program_io: JoltDevice,
         mut trace: Vec<JoltTraceStep<Self::InstructionSet>>,
         preprocessing: JoltPreprocessing<C, F, PCS, ProofTranscript>,
-        // todo: remove flag
-        #[cfg(feature = "para")] register_init: Vec<(RegisterNum, RegisterValue)>,
     ) -> (
         JoltProof<
             C,
@@ -407,8 +405,6 @@ where
             &program_io,
             &preprocessing.read_write_memory,
             &trace,
-            #[cfg(feature = "para")]
-            register_init,
         );
 
         let (bytecode_polynomials, range_check_polys) = rayon::join(
