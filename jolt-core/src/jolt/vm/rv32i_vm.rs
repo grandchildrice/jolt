@@ -306,46 +306,72 @@ mod tests {
         let artifact_guard = FIB_FILE_LOCK.lock().unwrap();
         let mut program = host::Program::new("fibonacci-guest");
         program.set_input(&9u32);
-        let (bytecode, memory_init) = program.decode();
-        #[cfg(feature = "para")]
-        let (io_device, trace) = {
-            let (io_device, segmentations) = program.segment_trace();
-            (io_device, segmentations[0].1.clone())
-        };
-        #[cfg(not(feature = "para"))]
-        let (io_device, trace) = program.trace();
-        drop(artifact_guard);
 
-        let preprocessing = RV32IJoltVM::preprocess(
-            bytecode.clone(),
-            io_device.memory_layout.clone(),
-            memory_init,
-            1 << 20,
-            1 << 20,
-            1 << 20,
-        );
-        #[cfg(feature = "para")]
-        let (proof, commitments, debug_info) =
-        <RV32IJoltVM as Jolt<F, PCS, C, M, ProofTranscript>>::segment_prove(
-            io_device,
-            trace,
-            preprocessing.clone(),
-            false, // セグメントの最後か？ もし最後なら、program_ioのoutputのOutputSumcheckProofで一致を証明する。
-        );
-        #[cfg(not(feature = "para"))]
-        let (proof, commitments, debug_info) =
-            <RV32IJoltVM as Jolt<F, PCS, C, M, ProofTranscript>>::prove(
+        let segmentation_enable = true;
+
+        if segmentation_enable {
+            let (bytecode, memory_init) = program.decode();
+            let (io_device, trace) = {
+                let (io_device, segmentations) = program.segment_trace();
+                (io_device, segmentations[0].1.clone())
+            };
+            drop(artifact_guard);
+    
+            let is_final_segment = false;
+    
+            let preprocessing = RV32IJoltVM::preprocess(
+                bytecode.clone(),
+                io_device.memory_layout.clone(),
+                memory_init,
+                1 << 20,
+                1 << 20,
+                1 << 20,
+            );
+            let (proof, commitments, debug_info) =
+            <RV32IJoltVM as Jolt<F, PCS, C, M, ProofTranscript>>::segment_prove(
                 io_device,
                 trace,
                 preprocessing.clone(),
+                is_final_segment, // セグメントの最後か？ もし最後なら、program_ioのoutputのOutputSumcheckProofで一致を証明する。
             );
-        let verification_result =
-            RV32IJoltVM::verify(preprocessing, proof, commitments, debug_info);
-        assert!(
-            verification_result.is_ok(),
-            "Verification failed with error: {:?}",
-            verification_result.err()
-        );
+    
+            let verification_result = if is_final_segment {
+                RV32IJoltVM::verify(preprocessing, proof, commitments, debug_info)
+            } else {
+                RV32IJoltVM::segment_verify(preprocessing, proof, commitments, debug_info)
+            };
+            // let verification_result = RV32IJoltVM::verify(preprocessing, proof, commitments, debug_info);
+            assert!(
+                verification_result.is_ok(),
+                "Verification failed with error: {:?}",
+                verification_result.err()
+            );
+        } else {
+            let (bytecode, memory_init) = program.decode();
+            let (io_device, trace) = program.trace();
+            drop(artifact_guard);
+    
+            let preprocessing = RV32IJoltVM::preprocess(
+                bytecode.clone(),
+                io_device.memory_layout.clone(),
+                memory_init,
+                1 << 20,
+                1 << 20,
+                1 << 20,
+            );
+            let (proof, commitments, debug_info) =
+                <RV32IJoltVM as Jolt<F, PCS, C, M, ProofTranscript>>::prove(
+                    io_device,
+                    trace,
+                    preprocessing.clone(),
+                );
+            let verification_result = RV32IJoltVM::verify(preprocessing, proof, commitments, debug_info);
+            assert!(
+                verification_result.is_ok(),
+                "Verification failed with error: {:?}",
+                verification_result.err()
+            );
+        }
     }
 
     #[test]

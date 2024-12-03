@@ -1163,6 +1163,118 @@ where
 
         Ok(())
     }
+
+    fn segment_verify(
+        proof: &Self,
+        preprocessing: &ReadWriteMemoryPreprocessing,
+        commitment: &ReadWriteMemoryCommitments<PCS, ProofTranscript>,
+        opening_accumulator: &mut VerifierOpeningAccumulator<F, PCS, ProofTranscript>,
+        transcript: &mut ProofTranscript,
+    ) -> Result<(), ProofVerifyError> {
+        let r_eq = transcript.challenge_vector(proof.num_rounds);
+
+        let (sumcheck_claim, r_sumcheck) =
+            proof
+                .sumcheck_proof
+                .verify(F::zero(), proof.num_rounds, 3, transcript)?;
+
+        let eq_eval = EqPolynomial::new(r_eq.to_vec()).evaluate(&r_sumcheck);
+
+        let program_io = preprocessing.program_io.as_ref().unwrap();
+        let memory_layout = &program_io.memory_layout;
+
+        let input_start_index =
+            memory_address_to_witness_index(memory_layout.input_start, memory_layout);
+        let ram_start_index =
+            memory_address_to_witness_index(RAM_START_ADDRESS, memory_layout) as u64;
+        assert!(
+            ram_start_index.is_power_of_two(),
+            "ram_start_index must be a power of two"
+        );
+
+        let io_memory_size = ram_start_index as usize;
+        let log_io_memory_size = io_memory_size.log_2();
+
+        let output_start_index =
+            memory_address_to_witness_index(
+                program_io.memory_layout.output_start,
+                &program_io.memory_layout);
+
+        let io_witness_range: Vec<_> = (0..io_memory_size)
+            .map(|i| {
+                if i >= input_start_index {
+                    F::one()
+                } else {
+                    F::zero()
+                }
+                // if i >= input_start_index && i < output_start_index {
+                //     F::one()
+                // } else {
+                //     F::zero()
+                // }
+            })
+            .collect();
+        let mut io_witness_range_eval = DensePolynomial::new(io_witness_range)
+            .evaluate(&r_sumcheck[(proof.num_rounds - log_io_memory_size)..]);
+
+        let r_prod: F = r_sumcheck[..(proof.num_rounds - log_io_memory_size)]
+            .iter()
+            .map(|r| F::one() - r)
+            .product();
+        io_witness_range_eval *= r_prod;
+
+        let mut v_io: Vec<u64> = vec![0; io_memory_size];
+        // Copy input bytes
+        let mut input_index =
+            memory_address_to_witness_index(memory_layout.input_start, memory_layout);
+        for chunk in program_io.inputs.chunks(4) {
+            let mut word = [0u8; 4];
+            for (i, byte) in chunk.iter().enumerate() {
+                word[i] = *byte;
+            }
+            let word = u32::from_le_bytes(word);
+            v_io[input_index] = word as u64;
+            input_index += 1;
+        }
+        // Copy output bytes
+        let mut output_index =
+            memory_address_to_witness_index(memory_layout.output_start, memory_layout);
+        for chunk in program_io.outputs.chunks(4) {
+            let mut word = [0u8; 4];
+            for (i, byte) in chunk.iter().enumerate() {
+                word[i] = *byte;
+            }
+            let word = u32::from_le_bytes(word);
+            v_io[output_index] = word as u64;
+            output_index += 1;
+        }
+        // Copy panic bit
+        v_io[memory_address_to_witness_index(memory_layout.panic, memory_layout)] =
+            program_io.panic as u64;
+        if !program_io.panic {
+            // Set termination bit
+            v_io[memory_address_to_witness_index(memory_layout.termination, memory_layout)] = 1;
+        }
+
+        let mut v_io_eval = DensePolynomial::from_u64(&v_io)
+            .evaluate(&r_sumcheck[(proof.num_rounds - log_io_memory_size)..]);
+        v_io_eval *= r_prod;
+
+        // assert_eq!(
+        //     eq_eval * io_witness_range_eval * (proof.opening - v_io_eval),
+        //     sumcheck_claim,
+        //     "Output sumcheck check failed."
+        // );
+
+        opening_accumulator.append(
+            &[&commitment.v_final],
+            r_sumcheck,
+            &[&proof.opening],
+            transcript,
+        );
+
+        Ok(())
+    }
 }
 
 #[derive(CanonicalSerialize, CanonicalDeserialize)]
@@ -1289,6 +1401,39 @@ where
             transcript,
         )?;
         OutputSumcheckProof::verify(
+            &self.output_proof,
+            preprocessing,
+            &commitments.read_write_memory,
+            opening_accumulator,
+            transcript,
+        )?;
+        TimestampValidityProof::verify(
+            &mut self.timestamp_validity_proof,
+            generators,
+            commitments,
+            opening_accumulator,
+            transcript,
+        )
+    }
+    pub fn segment_verify(
+        mut self,
+        generators: &PCS::Setup,
+        preprocessing: &ReadWriteMemoryPreprocessing,
+        commitments: &JoltCommitments<PCS, ProofTranscript>,
+        opening_accumulator: &mut VerifierOpeningAccumulator<F, PCS, ProofTranscript>,
+        transcript: &mut ProofTranscript,
+    ) -> Result<(), ProofVerifyError> {
+        ReadWriteMemoryProof::verify_memory_checking(
+            preprocessing,
+            generators,
+            self.memory_checking_proof,
+            &commitments.read_write_memory,
+            commitments,
+            opening_accumulator,
+            transcript,
+        )?;
+        // ToDo: we don't veriy this output check in segment veriy
+        OutputSumcheckProof::segment_verify(
             &self.output_proof,
             preprocessing,
             &commitments.read_write_memory,
