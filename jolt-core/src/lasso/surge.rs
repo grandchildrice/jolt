@@ -11,8 +11,7 @@ use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterato
 use std::marker::{PhantomData, Sync};
 
 use super::memory_checking::{
-    self, Initializable, MemoryCheckingBatchedProof, NoExogenousOpenings, StructuredPolynomialData,
-    VerifierComputedOpening,
+    Initializable, NoExogenousOpenings, StructuredPolynomialData, VerifierComputedOpening,
 };
 use crate::{
     jolt::instruction::JoltInstruction,
@@ -571,7 +570,7 @@ where
             _marker: PhantomData,
         };
 
-        let memory_batched_checking = SurgeProof::prove_memory_checking_batched(
+        let memory_checking = SurgeProof::prove_memory_checking_batched(
             generators,
             preprocessing,
             &[polynomials.clone(), polynomials],
@@ -579,14 +578,6 @@ where
             &mut opening_accumulator,
             &mut transcript,
         );
-
-        let memory_checking = MemoryCheckingProof {
-            multiset_hashes: memory_batched_checking.multiset_hashes,
-            read_write_grand_product: memory_batched_checking.read_write_grand_product,
-            init_final_grand_product: memory_batched_checking.init_final_grand_product,
-            openings: memory_batched_checking.openings[0].clone(),
-            exogenous_openings: memory_batched_checking.exogenous_openings[0].clone(),
-        };
 
         let proof = SurgeProof {
             _instruction: PhantomData,

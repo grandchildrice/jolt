@@ -18,7 +18,7 @@ use crate::{
 
 use crate::field::JoltField;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
-use itertools::{concat, interleave};
+use itertools::interleave;
 use rayon::prelude::*;
 
 #[derive(CanonicalSerialize, CanonicalDeserialize)]
@@ -65,28 +65,6 @@ where
     /// The openings associated with the grand products.
     pub openings: Openings,
     pub exogenous_openings: OtherOpenings,
-}
-
-#[derive(CanonicalSerialize, CanonicalDeserialize)]
-pub struct MemoryCheckingBatchedProof<F, PCS, Openings, OtherOpenings, ProofTranscript>
-where
-    F: JoltField,
-    PCS: CommitmentScheme<ProofTranscript, Field = F>,
-    Openings: StructuredPolynomialData<F> + Sync + CanonicalSerialize + CanonicalDeserialize,
-    OtherOpenings: ExogenousOpenings<F> + Sync,
-    ProofTranscript: Transcript,
-{
-    /// Read/write/init/final multiset hashes for each memory
-    pub multiset_hashes: MultisetHashes<F>,
-    /// The read and write grand products for every memory has the same size,
-    /// so they can be batched.
-    pub read_write_grand_product: BatchedGrandProductProof<PCS, ProofTranscript>,
-    /// The init and final grand products for every memory has the same size,
-    /// so they can be batched.
-    pub init_final_grand_product: BatchedGrandProductProof<PCS, ProofTranscript>,
-    /// The openings associated with the grand products.
-    pub openings: Vec<Openings>,
-    pub exogenous_openings: Vec<OtherOpenings>,
 }
 
 /// This type, used within a `StructuredPolynomialData` struct, indicates that the
@@ -312,8 +290,7 @@ where
         jolt_polynomials: &[JoltPolynomials<F>],
         opening_accumulator: &mut ProverOpeningAccumulator<F, ProofTranscript>,
         transcript: &mut ProofTranscript,
-    ) -> MemoryCheckingBatchedProof<F, PCS, Self::Openings, Self::ExogenousOpenings, ProofTranscript>
-    {
+    ) -> MemoryCheckingProof<F, PCS, Self::Openings, Self::ExogenousOpenings, ProofTranscript> {
         let (
             read_write_grand_product,
             init_final_grand_product,
@@ -342,24 +319,17 @@ where
         let (_, r_init_final_opening) =
             r_init_final.split_at(init_final_batch_size.next_power_of_two().log_2());
 
-        let mut openings = Vec::new();
-        let mut exogenous_openings = Vec::new();
+        let (openings, exogenous_openings) = Self::compute_openings_batched(
+            preprocessing,
+            opening_accumulator,
+            polynomials,
+            jolt_polynomials,
+            r_read_write_opening,
+            r_init_final_opening,
+            transcript,
+        );
 
-        for (polynomials, jolt_polynomials) in polynomials.iter().zip(jolt_polynomials) {
-            let (openings_single, exogenous_openings_single) = Self::compute_openings(
-                preprocessing,
-                opening_accumulator,
-                polynomials,
-                jolt_polynomials,
-                r_read_write_opening,
-                r_init_final_opening,
-                transcript,
-            );
-            openings.push(openings_single);
-            exogenous_openings.push(exogenous_openings_single);
-        }
-
-        MemoryCheckingBatchedProof {
+        MemoryCheckingProof {
             multiset_hashes,
             read_write_grand_product,
             init_final_grand_product,
@@ -568,6 +538,76 @@ where
             &openings.init_final_values(),
             transcript,
         );
+
+        (openings, exogenous_openings)
+    }
+
+    fn compute_openings_batched(
+        preprocessing: &Self::Preprocessing,
+        opening_accumulator: &mut ProverOpeningAccumulator<F, ProofTranscript>,
+        polynomials_array: &[Self::Polynomials],
+        jolt_polynomials_array: &[JoltPolynomials<F>],
+        r_read_write: &[F], // TODO: rの数と配置が合っているか確かめる
+        r_init_final: &[F], // TODO: rの数と配置が合っているか確かめる
+        transcript: &mut ProofTranscript,
+    ) -> (Self::Openings, Self::ExogenousOpenings) {
+        // 初期化
+        let mut openings = Self::Openings::initialize(preprocessing);
+        let mut exogenous_openings = Self::ExogenousOpenings::default();
+
+        for (polynomials, jolt_polynomials) in
+            polynomials_array.iter().zip(jolt_polynomials_array.iter())
+        {
+            let eq_read_write = EqPolynomial::evals(r_read_write);
+            polynomials
+                .read_write_values()
+                .par_iter()
+                .zip_eq(openings.read_write_values_mut().into_par_iter())
+                .chain(
+                    Self::ExogenousOpenings::exogenous_data(jolt_polynomials)
+                        .par_iter()
+                        .zip_eq(exogenous_openings.openings_mut().into_par_iter()),
+                )
+                .for_each(|(poly, opening)| {
+                    let claim = poly.evaluate_at_chi_low_optimized(&eq_read_write);
+                    *opening = claim;
+                });
+
+            let read_write_polys: Vec<_> = [
+                polynomials.read_write_values(),
+                Self::ExogenousOpenings::exogenous_data(jolt_polynomials),
+            ]
+            .concat();
+            let read_write_claims: Vec<_> =
+                [openings.read_write_values(), exogenous_openings.openings()].concat();
+            opening_accumulator.append(
+                &read_write_polys,
+                DensePolynomial::new(eq_read_write),
+                r_read_write.to_vec(),
+                &read_write_claims,
+                transcript,
+            );
+        }
+
+        for polynomials in polynomials_array {
+            let eq_init_final = EqPolynomial::evals(r_init_final);
+            polynomials
+                .init_final_values()
+                .par_iter()
+                .zip_eq(openings.init_final_values_mut().into_par_iter())
+                .for_each(|(poly, opening)| {
+                    let claim = poly.evaluate_at_chi_low_optimized(&eq_init_final);
+                    *opening = claim;
+                });
+
+            opening_accumulator.append(
+                &polynomials.init_final_values(),
+                DensePolynomial::new(eq_init_final),
+                r_init_final.to_vec(),
+                &openings.init_final_values(),
+                transcript,
+            );
+        }
 
         (openings, exogenous_openings)
     }
