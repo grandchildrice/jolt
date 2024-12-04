@@ -10,7 +10,9 @@ use crate::r1cs::spartan::{self, UniformSpartanProof};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use common::rv_trace::{MemoryLayout, NUM_CIRCUIT_FLAGS};
 use log::debug;
+use read_write_memory::cut_trace;
 use serde::{Deserialize, Serialize};
+use tracing_subscriber::field::debug;
 use std::marker::PhantomData;
 use strum::EnumCount;
 use timestamp_range_check::TimestampRangeCheckStuff;
@@ -536,7 +538,7 @@ where
     #[tracing::instrument(skip_all, name = "Jolt::prove")]
     fn segment_prove(
         program_io: JoltDevice,
-        mut trace: Vec<JoltTraceStep<Self::InstructionSet>>,
+        mut original_trace: Vec<JoltTraceStep<Self::InstructionSet>>,
         preprocessing: JoltPreprocessing<C, F, PCS, ProofTranscript>,
         is_final_segment: bool,
     ) -> (
@@ -553,19 +555,23 @@ where
         JoltCommitments<PCS, ProofTranscript>,
         Option<ProverDebugInfo<F, ProofTranscript>>,
     ) {
-        let trace_length = trace.len();
-        let padded_trace_length = trace_length.next_power_of_two();
-        debug!("Original Trace length: {}", trace_length); 
-        debug!("Padded original trace length: {}", padded_trace_length);
+        // let trace_length = trace.len();
+        // let padded_trace_length = trace_length.next_power_of_two();
+        debug!("Original Trace length: {}", original_trace.len()); 
+        debug!("Padded original trace length: {}", original_trace.len().next_power_of_two());
 
-        JoltTraceStep::pad(&mut trace);
+        let (mut padded_segment_trace, _) = cut_trace(&original_trace);
+        let padded_segment_trace_length = padded_segment_trace.len();
+        let segment_trace_length = padded_segment_trace_length; // WIP: fiat_shamir_preambleに渡すのは、パディングしてないtraceの長さを渡さないとけないが、一旦パディングされたものを渡して試してみる。
+
+        JoltTraceStep::pad(&mut original_trace);
 
         let mut transcript = ProofTranscript::new(b"Jolt transcript");
         Self::fiat_shamir_preamble(
             &mut transcript,
             &program_io,
             &program_io.memory_layout,
-            trace_length,
+            segment_trace_length,
         );
 
         debug!("running InstructionLookupsProof::generate_witness");
@@ -578,20 +584,20 @@ where
                 Self::InstructionSet,
                 Self::Subtables,
                 ProofTranscript,
-            >::generate_witness(&preprocessing.instruction_lookups, &trace);
+            >::generate_witness(&preprocessing.instruction_lookups, &padded_segment_trace);
 
         debug!("running InstructionLookupsProof::generate_witness");
         let (memory_polynomials, read_timestamps) = ReadWriteMemoryPolynomials::generate_witness(
             &program_io,
             &preprocessing.read_write_memory,
-            &trace,
+            &original_trace,
         );
 
         let (bytecode_polynomials, range_check_polys) = rayon::join(
             || {
                 BytecodeProof::<F, PCS, ProofTranscript>::generate_witness(
                     &preprocessing.bytecode,
-                    &mut trace,
+                    &mut padded_segment_trace,
                 )
             },
             || {
@@ -601,8 +607,9 @@ where
             },
         );
 
+        debug!("running Self::Constraints::construct_constraints");
         let r1cs_builder = Self::Constraints::construct_constraints(
-            padded_trace_length,
+            padded_segment_trace_length,
             program_io.memory_layout.input_start,
         );
         let spartan_key = spartan::UniformSpartanProof::<
@@ -610,14 +617,15 @@ where
             <Self::Constraints as R1CSConstraints<C, F>>::Inputs,
             F,
             ProofTranscript,
-        >::setup(&r1cs_builder, padded_trace_length);
+        >::setup(&r1cs_builder, padded_segment_trace_length);
 
+        debug!("running R1CSPolynomials::new");
         let r1cs_polynomials = R1CSPolynomials::new::<
             C,
             M,
             Self::InstructionSet,
             <Self::Constraints as R1CSConstraints<C, F>>::Inputs,
-        >(&trace);
+        >(&padded_segment_trace);
 
         let mut jolt_polynomials = JoltPolynomials {
             bytecode: bytecode_polynomials,
@@ -627,12 +635,16 @@ where
             r1cs: r1cs_polynomials,
         };
 
+        debug!("running r1cs_builder.compute_aux");
         r1cs_builder.compute_aux(&mut jolt_polynomials);
 
+        debug!("running jolt_polynomials.commit");
         let jolt_commitments = jolt_polynomials.commit::<C, PCS, ProofTranscript>(&preprocessing);
 
+        debug!("running transcript.append_scalar");
         transcript.append_scalar(&spartan_key.vk_digest);
 
+        
         jolt_commitments
             .read_write_values()
             .iter()
@@ -662,6 +674,7 @@ where
             &mut transcript,
         );
 
+        debug!("running ReadWriteMemoryProof::segment_prove");
         let memory_proof = ReadWriteMemoryProof::segment_prove(
             &preprocessing.generators,
             &preprocessing.read_write_memory,
@@ -693,7 +706,7 @@ where
         drop_in_background_thread(jolt_polynomials);
 
         let jolt_proof = JoltProof {
-            trace_length,
+            trace_length: segment_trace_length,
             program_io,
             bytecode: bytecode_proof,
             read_write_memory: memory_proof,

@@ -7,7 +7,6 @@ use crate::poly::opening_proof::{ProverOpeningAccumulator, VerifierOpeningAccumu
 use crate::utils::thread::unsafe_allocate_zero_vec;
 use log::debug;
 use rayon::prelude::*;
-use tracing_subscriber::field::debug;
 #[cfg(test)]
 use std::collections::HashSet;
 use std::marker::PhantomData;
@@ -30,6 +29,7 @@ use common::constants::{
 };
 use common::rv_trace::{JoltDevice, MemoryLayout, MemoryOp};
 
+use super::rv32i_vm::RV32I;
 use super::{timestamp_range_check::TimestampValidityProof, JoltCommitments};
 use super::{JoltPolynomials, JoltStuff, JoltTraceStep};
 
@@ -249,6 +249,30 @@ fn map_to_polys<F: JoltField, const N: usize>(vals: [&[u64]; N]) -> [DensePolyno
         .unwrap()
 }
 
+pub fn cut_trace<InstructionSet: JoltInstructionSet>(trace: &[JoltTraceStep<InstructionSet>]) -> (Vec<JoltTraceStep<InstructionSet>>, [u32; 32]) {
+    let mut f = File::open("tmp_register_init.bin").expect("Failed to open");
+    let mut buffer = Vec::new();
+    f.read_to_end(&mut buffer).expect("Failed to read");
+    let (_register_init, segment_indecies): ([i64; 32], (usize, usize)) =
+        bincode::deserialize(&buffer).expect("Failed to deserialize");
+
+    let mut trace = trace[segment_indecies.0..segment_indecies.1].to_vec();
+    debug!("trace len: {}", trace.len());
+    JoltTraceStep::pad(&mut trace); // Do we need to pad here?
+    debug!("trace len after pad: {}", trace.len());
+
+    let register_init: [u32; 32] = if segment_indecies.0 != 0 {
+        debug!("overwirte register state by register_init");
+
+        todo!()
+    } else {
+        debug!("segment_indecies.0 == 0, which means the first segment, so no overwriting");
+        [0u32; 32]
+    };
+
+    (trace, register_init)
+}
+
 type RegisterNum = u8;
 type RegisterValue = [u8; 4];
 
@@ -286,44 +310,24 @@ impl<F: JoltField> ReadWriteMemoryPolynomials<F> {
 
             println!("in para cfg: trace len: {}", trace.len());
 
-            let mut f = File::open("tmp_register_init.bin").expect("Failed to open");
-            let mut buffer = Vec::new();
-            f.read_to_end(&mut buffer).expect("Failed to read");
-            let (_register_init, segment_indecies): ([i64; 32], (usize, usize)) =
-                bincode::deserialize(&buffer).expect("Failed to deserialize");
-
-            debug!("segment_indecies: {:?}", segment_indecies);
-
-            let register_init: [u32; 32] = [0u32; 32]; // todo use the register_init loaded from file
+            let (trace, register_init) = cut_trace(trace);
 
             let mut v_init_index = 0; // ? registerのindexは0から？
             println!("v_init len: {}", v_init.len());
 
-            if segment_indecies.0 != 0 {
-                debug!("overwirte register state by register_init");
-                for (i, word) in register_init.into_iter().enumerate() {
-                    // let mut word = [0u8; 32];
-                    // for (i, byte) in reg.iter().enumerate() {
-                    //     word[i] = *byte;
-                    // }
-                    // let word: u32 = u32::from_le_bytes(word);
-                    println!("reg {i}");
-                    v_init[v_init_index] = word as u64;
-                    v_init_index += 1;
-                }
-            } else {
-                debug!("segment_indecies.0 == 0, which means the first segment, so no overwriting");
+            for (i, word) in register_init.into_iter().enumerate() {
+                // let mut word = [0u8; 32];
+                // for (i, byte) in reg.iter().enumerate() {
+                //     word[i] = *byte;
+                // }
+                // let word: u32 = u32::from_le_bytes(word);
+                println!("reg {i}");
+                v_init[v_init_index] = word as u64;
+                v_init_index += 1;
             }
 
-
-            let mut trace = trace[segment_indecies.0..segment_indecies.1].to_vec();
-            debug!("trace len: {}", trace.len());
-            JoltTraceStep::pad(&mut trace); // Do we need to pad here?
-            debug!("trace len after pad: {}", trace.len());
             trace
         };
-
-        println!("trace len: {}", trace.len());
 
         // Copy bytecode
         let mut v_init_index = memory_address_to_witness_index(
@@ -385,6 +389,7 @@ impl<F: JoltField> ReadWriteMemoryPolynomials<F> {
         let span = tracing::span!(tracing::Level::DEBUG, "memory_trace_processing");
         let _enter = span.enter();
 
+        debug!("some iter of trace");
         for (i, step) in trace.iter().enumerate() {
             let timestamp = i as u64;
 
