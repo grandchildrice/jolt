@@ -29,7 +29,6 @@ use common::constants::{
 };
 use common::rv_trace::{JoltDevice, MemoryLayout, MemoryOp};
 
-use super::rv32i_vm::RV32I;
 use super::{timestamp_range_check::TimestampValidityProof, JoltCommitments};
 use super::{JoltPolynomials, JoltStuff, JoltTraceStep};
 
@@ -255,7 +254,7 @@ pub fn cut_trace<InstructionSet: JoltInstructionSet>(
     let mut f = File::open("tmp_register_init.bin").expect("Failed to open");
     let mut buffer = Vec::new();
     f.read_to_end(&mut buffer).expect("Failed to read");
-    let (_register_init, segment_indices): ([i64; 32], (usize, usize)) =
+    let (_register_init, segment_indecies): ([i64; 32], (usize, usize)) =
         bincode::deserialize(&buffer).expect("Failed to deserialize");
 
     let mut trace = trace[segment_indices.0..segment_indices.1].to_vec();
@@ -263,8 +262,8 @@ pub fn cut_trace<InstructionSet: JoltInstructionSet>(
     JoltTraceStep::pad(&mut trace); // Do we need to pad here?
     debug!("trace len after pad: {}", trace.len());
 
-    let register_init: [u32; 32] = if segment_indices.0 != 0 {
-        debug!("overwrite register state by register_init");
+    let register_init: [u32; 32] = if segment_indecies.0 != 0 {
+        debug!("overwirte register state by register_init");
 
         todo!()
     } else {
@@ -323,7 +322,6 @@ impl<F: JoltField> ReadWriteMemoryPolynomials<F> {
                 //     word[i] = *byte;
                 // }
                 // let word: u32 = u32::from_le_bytes(word);
-                println!("reg {i}");
                 v_init[v_init_index] = word as u64;
                 v_init_index += 1;
             }
@@ -1233,14 +1231,10 @@ where
         opening_accumulator: &mut VerifierOpeningAccumulator<F, PCS, ProofTranscript>,
         transcript: &mut ProofTranscript,
     ) -> Result<(), ProofVerifyError> {
-        let r_eq = transcript.challenge_vector(proof.num_rounds);
-
         let (_sumcheck_claim, r_sumcheck) =
             proof
                 .sumcheck_proof
                 .verify(F::zero(), proof.num_rounds, 3, transcript)?;
-
-        let _eq_eval = EqPolynomial::new(r_eq.to_vec()).evaluate(&r_sumcheck);
 
         let program_io = preprocessing.program_io.as_ref().unwrap();
         let memory_layout = &program_io.memory_layout;
@@ -1322,6 +1316,7 @@ where
             .evaluate(&r_sumcheck[(proof.num_rounds - log_io_memory_size)..]);
         v_io_eval *= r_prod;
 
+        // 最後のセグメント以外は、outpoutが確定していないので、Outputsumcheckのcheckは行わない。
         // assert_eq!(
         //     eq_eval * io_witness_range_eval * (proof.opening - v_io_eval),
         //     sumcheck_claim,
