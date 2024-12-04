@@ -29,7 +29,6 @@ use common::constants::{
 };
 use common::rv_trace::{JoltDevice, MemoryLayout, MemoryOp};
 
-use super::rv32i_vm::RV32I;
 use super::{timestamp_range_check::TimestampValidityProof, JoltCommitments};
 use super::{JoltPolynomials, JoltStuff, JoltTraceStep};
 
@@ -321,7 +320,6 @@ impl<F: JoltField> ReadWriteMemoryPolynomials<F> {
                 //     word[i] = *byte;
                 // }
                 // let word: u32 = u32::from_le_bytes(word);
-                println!("reg {i}");
                 v_init[v_init_index] = word as u64;
                 v_init_index += 1;
             }

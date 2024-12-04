@@ -20,7 +20,6 @@ use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
 use std::fs::File;
 
-use log::{debug, info, warn, error};
 use env_logger;
 
 use std::sync::Once;
