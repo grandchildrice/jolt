@@ -20,9 +20,17 @@ use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
 use std::fs::File;
 
-use log::{debug, info, warn, error};
 use env_logger;
 
+use std::sync::Once;
+
+static INIT: Once = Once::new();
+
+fn initialize_logger() {
+    INIT.call_once(|| {
+        env_logger::init();
+    });
+}
 
 use super::{Jolt, JoltCommitments, JoltProof};
 use crate::jolt::instruction::{
@@ -273,6 +281,17 @@ mod tests {
         static ref SHA3_FILE_LOCK: Mutex<()> = Mutex::new(());
     }
 
+    use std::sync::Once;
+
+    static INIT: Once = Once::new();
+    
+    fn initialize_logger() {
+        INIT.call_once(|| {
+            env_logger::init();
+        });
+    }
+    
+
     fn test_instruction_set_subtables<PCS, ProofTranscript>()
     where
         PCS: CommitmentScheme<ProofTranscript>,
@@ -317,7 +336,7 @@ mod tests {
         let mut program = host::Program::new("fibonacci-guest");
         program.set_input(&9u32);
 
-        env_logger::init();
+        initialize_logger();
 
         let segmentation_enable = true;
 
@@ -427,12 +446,14 @@ mod tests {
 
     #[test]
     fn fib_e2e_mock() {
+        initialize_logger();
         fib_e2e::<Fr, MockCommitScheme<Fr, KeccakTranscript>, KeccakTranscript>();
     }
 
     #[ignore = "Opening proof reduction for Hyrax doesn't work right now"]
     #[test]
     fn fib_e2e_hyrax() {
+        initialize_logger();
         fib_e2e::<
             ark_bn254::Fr,
             HyraxScheme<ark_bn254::G1Projective, KeccakTranscript>,
@@ -442,11 +463,13 @@ mod tests {
 
     #[test]
     fn fib_e2e_zeromorph() {
+        initialize_logger();
         fib_e2e::<Fr, Zeromorph<Bn254, KeccakTranscript>, KeccakTranscript>();
     }
 
     #[test]
     fn fib_e2e_hyperkzg() {
+        initialize_logger();
         fib_e2e::<Fr, HyperKZG<Bn254, KeccakTranscript>, KeccakTranscript>();
     }
 
