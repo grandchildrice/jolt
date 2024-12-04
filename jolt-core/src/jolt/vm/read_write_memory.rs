@@ -249,24 +249,26 @@ fn map_to_polys<F: JoltField, const N: usize>(vals: [&[u64]; N]) -> [DensePolyno
         .unwrap()
 }
 
-pub fn cut_trace<InstructionSet: JoltInstructionSet>(trace: &[JoltTraceStep<InstructionSet>]) -> (Vec<JoltTraceStep<InstructionSet>>, [u32; 32]) {
+pub fn cut_trace<InstructionSet: JoltInstructionSet>(
+    trace: &[JoltTraceStep<InstructionSet>],
+) -> (Vec<JoltTraceStep<InstructionSet>>, [u32; 32]) {
     let mut f = File::open("tmp_register_init.bin").expect("Failed to open");
     let mut buffer = Vec::new();
     f.read_to_end(&mut buffer).expect("Failed to read");
-    let (_register_init, segment_indecies): ([i64; 32], (usize, usize)) =
+    let (_register_init, segment_indices): ([i64; 32], (usize, usize)) =
         bincode::deserialize(&buffer).expect("Failed to deserialize");
 
-    let mut trace = trace[segment_indecies.0..segment_indecies.1].to_vec();
+    let mut trace = trace[segment_indices.0..segment_indices.1].to_vec();
     debug!("trace len: {}", trace.len());
     JoltTraceStep::pad(&mut trace); // Do we need to pad here?
     debug!("trace len after pad: {}", trace.len());
 
-    let register_init: [u32; 32] = if segment_indecies.0 != 0 {
-        debug!("overwirte register state by register_init");
+    let register_init: [u32; 32] = if segment_indices.0 != 0 {
+        debug!("overwrite register state by register_init");
 
         todo!()
     } else {
-        debug!("segment_indecies.0 == 0, which means the first segment, so no overwriting");
+        debug!("segment_indices.0 == 0, which means the first segment, so no overwriting");
         [0u32; 32]
     };
 
@@ -1492,7 +1494,7 @@ where
             opening_accumulator,
             transcript,
         )?;
-        // ToDo: we don't veriy this output check in segment veriy
+        // ToDo: we don't verify this output check in segment verify
         OutputSumcheckProof::segment_verify(
             &self.output_proof,
             preprocessing,

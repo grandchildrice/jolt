@@ -20,9 +20,8 @@ use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
 use std::fs::File;
 
-use log::{debug, info, warn, error};
 use env_logger;
-
+use log::{debug, error, info, warn};
 
 use super::{Jolt, JoltCommitments, JoltProof};
 use crate::jolt::instruction::{
@@ -264,8 +263,8 @@ mod tests {
     use std::sync::Mutex;
     use strum::{EnumCount, IntoEnumIterator};
 
-    use log::debug;
     use env_logger;
+    use log::debug;
 
     // If multiple tests try to read the same trace artifacts simultaneously, they will fail
     lazy_static::lazy_static! {
@@ -333,14 +332,14 @@ mod tests {
 
                 // セグメントごとに分かれているtraceをひとつにし、そのindexを記録しておく。
                 let mut offset: usize = 0;
-                let mut segment_indecies: Vec<(usize, usize)> = Vec::with_capacity(traces.len());
+                let mut segment_indices: Vec<(usize, usize)> = Vec::with_capacity(traces.len());
                 let trace = traces
                     .into_iter()
                     .map(|trace_segment| {
                         let start = offset;
                         offset += trace_segment.len();
                         let end = offset;
-                        segment_indecies.push((start, end));
+                        segment_indices.push((start, end));
 
                         // println!("offset: {:?}", offset);
 
@@ -349,18 +348,19 @@ mod tests {
                     .flatten()
                     .collect();
 
-                debug!("segment_indecies: {:?}", segment_indecies);
+                debug!("segment_indices: {:?}", segment_indices);
 
                 // save register_init to a file
-                let encoded = bincode::serialize(&(raw_register_init, segment_indecies[segment_index]))
-                    .expect("Failed to serialize");
+                let encoded =
+                    bincode::serialize(&(raw_register_init, segment_indices[segment_index]))
+                        .expect("Failed to serialize");
                 let mut file = File::create("tmp_register_init.bin").expect("Failed to create");
                 file.write_all(&encoded).expect("Failed to write");
 
-                let (register_init, segment_indecies): ([i64; 32], (usize, usize)) =
+                let (register_init, segment_indices): ([i64; 32], (usize, usize)) =
                     bincode::deserialize(&encoded).expect("Failed to deserialize");
                 debug!("register_init: {:?}", register_init);
-                debug!("segment_indecies: {:?}", segment_indecies);
+                debug!("segment_indices: {:?}", segment_indices);
 
                 (io_device, trace)
             };
