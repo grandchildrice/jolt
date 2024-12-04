@@ -20,6 +20,10 @@ use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
 use std::fs::File;
 
+use log::{debug, info, warn, error};
+use env_logger;
+
+
 use super::{Jolt, JoltCommitments, JoltProof};
 use crate::jolt::instruction::{
     add::ADDInstruction, and::ANDInstruction, beq::BEQInstruction, bge::BGEInstruction,
@@ -260,6 +264,9 @@ mod tests {
     use std::sync::Mutex;
     use strum::{EnumCount, IntoEnumIterator};
 
+    use log::debug;
+    use env_logger;
+
     // If multiple tests try to read the same trace artifacts simultaneously, they will fail
     lazy_static::lazy_static! {
         static ref FIB_FILE_LOCK: Mutex<()> = Mutex::new(());
@@ -310,13 +317,19 @@ mod tests {
         let mut program = host::Program::new("fibonacci-guest");
         program.set_input(&9u32);
 
+        env_logger::init();
+
         let segmentation_enable = true;
+
+        // debug!("This is a debug message.");
+
+        let segment_index = 0;
 
         if segmentation_enable {
             let (bytecode, memory_init) = program.decode();
             let (io_device, trace) = {
                 let (io_device, snapshots, traces) = program.segment_trace();
-                let raw_register_init = snapshots[1].0.clone();
+                let raw_register_init = snapshots[segment_index].0.clone();
 
                 // セグメントごとに分かれているtraceをひとつにし、そのindexを記録しておく。
                 let mut offset: usize = 0;
@@ -336,25 +349,25 @@ mod tests {
                     .flatten()
                     .collect();
 
-                println!("segment_indecies: {:?}", segment_indecies);
+                debug!("segment_indecies: {:?}", segment_indecies);
 
                 // save register_init to a file
-                let encoded = bincode::serialize(&(raw_register_init, segment_indecies[1]))
+                let encoded = bincode::serialize(&(raw_register_init, segment_indecies[segment_index]))
                     .expect("Failed to serialize");
                 let mut file = File::create("tmp_register_init.bin").expect("Failed to create");
                 file.write_all(&encoded).expect("Failed to write");
 
                 let (register_init, segment_indecies): ([i64; 32], (usize, usize)) =
                     bincode::deserialize(&encoded).expect("Failed to deserialize");
-                println!("register_init: {:?}", register_init);
-                println!("segment_indecies: {:?}", segment_indecies);
+                debug!("register_init: {:?}", register_init);
+                debug!("segment_indecies: {:?}", segment_indecies);
 
                 (io_device, trace)
             };
             drop(artifact_guard);
 
             let is_final_segment = false;
-
+            debug!("running RV32IJoltVM::preprocess");
             let preprocessing = RV32IJoltVM::preprocess(
                 bytecode.clone(),
                 io_device.memory_layout.clone(),
@@ -363,6 +376,7 @@ mod tests {
                 1 << 20,
                 1 << 20,
             );
+            debug!("running RV32IJoltVM::segment_prove");
             let (proof, commitments, debug_info) =
                 <RV32IJoltVM as Jolt<F, PCS, C, M, ProofTranscript>>::segment_prove(
                     io_device,

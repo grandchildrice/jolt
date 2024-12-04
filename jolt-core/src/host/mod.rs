@@ -8,6 +8,7 @@ use std::{
     process::Command,
 };
 
+use log::debug;
 use postcard;
 use rayon::prelude::*;
 use serde::Serialize;
@@ -244,7 +245,7 @@ impl Program {
             .chunks(TRACE_SEGMENTATION_SIZE as usize)
             .map(|segmented_raw_trace| {
                 let segmented_raw_trace = segmented_raw_trace.to_vec();
-                println!("segmented_raw_trace len: {}", segmented_raw_trace.len());
+                debug!("segmented_raw_trace len: {}", segmented_raw_trace.len());
                 let trace: Vec<_> = segmented_raw_trace
                     .into_par_iter()
                     .flat_map(|row| match row.instruction.opcode {
@@ -279,6 +280,7 @@ impl Program {
                         }
                     })
                     .collect();
+                debug!("trace with virtual sequence: {}", trace.len());
                 trace
             })
             .collect();

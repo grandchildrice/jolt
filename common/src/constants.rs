@@ -24,4 +24,4 @@ pub const fn virtual_register_index(index: u64) -> u64 {
 // using a constant shift, namely (RAM_WITNESS_OFFSET + RAM_START_ADDRESS)
 
 // this constant should be power of 2
-pub const TRACE_SEGMENTATION_SIZE: u64 = 512;
+pub const TRACE_SEGMENTATION_SIZE: u64 = 100; // this size is the number of instructions in a segment
