@@ -5,7 +5,9 @@ use crate::lasso::memory_checking::{
 };
 use crate::poly::opening_proof::{ProverOpeningAccumulator, VerifierOpeningAccumulator};
 use crate::utils::thread::unsafe_allocate_zero_vec;
+use log::debug;
 use rayon::prelude::*;
+use tracing_subscriber::field::debug;
 #[cfg(test)]
 use std::collections::HashSet;
 use std::marker::PhantomData;
@@ -273,6 +275,7 @@ impl<F: JoltField> ReadWriteMemoryPolynomials<F> {
             .unwrap();
 
         let memory_size = max_trace_address.next_power_of_two() as usize;
+        debug!("memory_size: {}", memory_size);
         let mut v_init: Vec<u64> = vec![0; memory_size];
         // todo: remove flag and read file
         // Copy register
@@ -289,25 +292,35 @@ impl<F: JoltField> ReadWriteMemoryPolynomials<F> {
             let (_register_init, segment_indecies): ([i64; 32], (usize, usize)) =
                 bincode::deserialize(&buffer).expect("Failed to deserialize");
 
-            println!("segment_indecies: {:?}", segment_indecies);
+            debug!("segment_indecies: {:?}", segment_indecies);
 
             let register_init: [u32; 32] = [0u32; 32]; // todo use the register_init loaded from file
 
             let mut v_init_index = 0; // ? registerのindexは0から？
             println!("v_init len: {}", v_init.len());
 
-            for (i, word) in register_init.into_iter().enumerate() {
-                // let mut word = [0u8; 32];
-                // for (i, byte) in reg.iter().enumerate() {
-                //     word[i] = *byte;
-                // }
-                // let word: u32 = u32::from_le_bytes(word);
-                println!("reg {i}");
-                v_init[v_init_index] = word as u64;
-                v_init_index += 1;
+            if segment_indecies.0 != 0 {
+                debug!("overwirte register state by register_init");
+                for (i, word) in register_init.into_iter().enumerate() {
+                    // let mut word = [0u8; 32];
+                    // for (i, byte) in reg.iter().enumerate() {
+                    //     word[i] = *byte;
+                    // }
+                    // let word: u32 = u32::from_le_bytes(word);
+                    println!("reg {i}");
+                    v_init[v_init_index] = word as u64;
+                    v_init_index += 1;
+                }
+            } else {
+                debug!("segment_indecies.0 == 0, which means the first segment, so no overwriting");
             }
 
-            trace[segment_indecies.0..segment_indecies.1].to_vec()
+
+            let mut trace = trace[segment_indecies.0..segment_indecies.1].to_vec();
+            debug!("trace len: {}", trace.len());
+            JoltTraceStep::pad(&mut trace); // Do we need to pad here?
+            debug!("trace len after pad: {}", trace.len());
+            trace
         };
 
         println!("trace len: {}", trace.len());
@@ -335,6 +348,8 @@ impl<F: JoltField> ReadWriteMemoryPolynomials<F> {
             v_init[v_init_index] = word as u64;
             v_init_index += 1;
         }
+
+        debug!("Copied bytecode and inputs");
 
         #[cfg(test)]
         let mut init_tuples: HashSet<(usize, u64, u64)> = HashSet::new();
@@ -994,11 +1009,11 @@ where
         let r_eq = transcript.challenge_vector(num_rounds);
         let eq: DensePolynomial<F> = DensePolynomial::new(EqPolynomial::evals(&r_eq));
 
-        let _input_start_index = memory_address_to_witness_index(
+        let input_start_index = memory_address_to_witness_index(
             program_io.memory_layout.input_start,
             &program_io.memory_layout,
         ) as u64;
-        let _ignore_start_index = memory_address_to_witness_index(
+        let ignore_start_index = memory_address_to_witness_index(
             if is_final_segment {
                 RAM_START_ADDRESS
             } else {

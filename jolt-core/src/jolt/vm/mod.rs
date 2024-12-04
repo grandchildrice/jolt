@@ -9,6 +9,7 @@ use crate::r1cs::constraints::R1CSConstraints;
 use crate::r1cs::spartan::{self, UniformSpartanProof};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
 use common::rv_trace::{MemoryLayout, NUM_CIRCUIT_FLAGS};
+use log::debug;
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 use strum::EnumCount;
@@ -554,7 +555,8 @@ where
     ) {
         let trace_length = trace.len();
         let padded_trace_length = trace_length.next_power_of_two();
-        println!("Trace length: {}", trace_length);
+        debug!("Original Trace length: {}", trace_length); 
+        debug!("Padded original trace length: {}", padded_trace_length);
 
         JoltTraceStep::pad(&mut trace);
 
@@ -566,6 +568,7 @@ where
             trace_length,
         );
 
+        debug!("running InstructionLookupsProof::generate_witness");
         let instruction_polynomials =
             InstructionLookupsProof::<
                 C,
@@ -577,6 +580,7 @@ where
                 ProofTranscript,
             >::generate_witness(&preprocessing.instruction_lookups, &trace);
 
+        debug!("running InstructionLookupsProof::generate_witness");
         let (memory_polynomials, read_timestamps) = ReadWriteMemoryPolynomials::generate_witness(
             &program_io,
             &preprocessing.read_write_memory,
