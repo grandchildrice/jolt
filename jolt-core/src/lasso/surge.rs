@@ -183,6 +183,53 @@ where
         )
     }
 
+    #[tracing::instrument(skip_all, name = "ReadWriteMemory::compute_leaves")]
+    fn compute_leaves_batched<'a>(
+        preprocessing: &Self::Preprocessing,
+        polynomials_array: &[Self::Polynomials],
+        jolt_polynomials_array: &'a [JoltPolynomials<F>],
+        gamma: &F,
+        tau: &F,
+    ) -> ((Vec<F>, usize), (Vec<F>, usize)) {
+        let mut read_write_leaves_singles = Vec::new();
+        let mut init_final_leaves_singles = Vec::new();
+
+        for (polynomials, jolt_polynomials) in
+            polynomials_array.iter().zip(jolt_polynomials_array.iter())
+        {
+            let (read_write_leaves_single, init_final_leaves_single) =
+                Self::compute_leaves(preprocessing, polynomials, jolt_polynomials, &gamma, &tau);
+            read_write_leaves_singles.push(read_write_leaves_single);
+            init_final_leaves_singles.push(init_final_leaves_single);
+        }
+
+        let leaves_len = read_write_leaves_singles[0].0.len();
+        let array_len = read_write_leaves_singles.len();
+        let mut read_write_leaves_vec = Vec::new();
+        for i in 0..leaves_len {
+            let mut elem = F::one();
+            for j in 0..array_len {
+                elem *= read_write_leaves_singles[j].0[i];
+            }
+            read_write_leaves_vec.push(elem);
+        }
+        let read_write_leaves = (read_write_leaves_vec, read_write_leaves_singles[0].1);
+
+        let leaves_len = init_final_leaves_singles[0].0.len();
+        let array_len = init_final_leaves_singles.len();
+        let mut init_final_leaves_vec = Vec::new();
+        for i in 0..leaves_len {
+            let mut elem = F::one();
+            for j in 0..array_len {
+                elem *= init_final_leaves_singles[j].0[i];
+            }
+            init_final_leaves_vec.push(elem);
+        }
+        let init_final_leaves = (init_final_leaves_vec, init_final_leaves_singles[0].1);
+
+        (read_write_leaves, init_final_leaves)
+    }
+
     fn protocol_name() -> &'static [u8] {
         b"SurgeMemCheck"
     }
