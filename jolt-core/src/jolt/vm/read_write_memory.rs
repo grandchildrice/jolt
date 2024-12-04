@@ -249,11 +249,13 @@ fn map_to_polys<F: JoltField, const N: usize>(vals: [&[u64]; N]) -> [DensePolyno
         .unwrap()
 }
 
-pub fn cut_trace<InstructionSet: JoltInstructionSet>(trace: &[JoltTraceStep<InstructionSet>]) -> (Vec<JoltTraceStep<InstructionSet>>, [u32; 32]) {
+pub fn cut_trace<InstructionSet: JoltInstructionSet>(
+    trace: &[JoltTraceStep<InstructionSet>],
+) -> (Vec<JoltTraceStep<InstructionSet>>, [u32; 32]) {
     let mut f = File::open("tmp_register_init.bin").expect("Failed to open");
     let mut buffer = Vec::new();
     f.read_to_end(&mut buffer).expect("Failed to read");
-    let (_register_init, segment_indecies): ([i64; 32], (usize, usize)) =
+    let (register_init, segment_indecies): ([i64; 32], (usize, usize)) =
         bincode::deserialize(&buffer).expect("Failed to deserialize");
 
     let mut trace = trace[segment_indecies.0..segment_indecies.1].to_vec();
@@ -263,8 +265,12 @@ pub fn cut_trace<InstructionSet: JoltInstructionSet>(trace: &[JoltTraceStep<Inst
 
     let register_init: [u32; 32] = if segment_indecies.0 != 0 {
         debug!("overwirte register state by register_init");
-
-        todo!()
+        let converted_register_init: [u32; 32] = register_init.map(|value| {
+            let truncated = value as i32;
+            let bytes = truncated.to_le_bytes();
+            u32::from_le_bytes(bytes)
+        });
+        converted_register_init
     } else {
         debug!("segment_indecies.0 == 0, which means the first segment, so no overwriting");
         [0u32; 32]
