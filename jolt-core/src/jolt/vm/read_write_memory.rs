@@ -5,6 +5,7 @@ use crate::lasso::memory_checking::{
 };
 use crate::poly::opening_proof::{ProverOpeningAccumulator, VerifierOpeningAccumulator};
 use crate::utils::thread::unsafe_allocate_zero_vec;
+use log::debug;
 use rayon::prelude::*;
 #[cfg(test)]
 use std::collections::HashSet;
@@ -28,8 +29,12 @@ use common::constants::{
 };
 use common::rv_trace::{JoltDevice, MemoryLayout, MemoryOp};
 
+use super::rv32i_vm::RV32I;
 use super::{timestamp_range_check::TimestampValidityProof, JoltCommitments};
 use super::{JoltPolynomials, JoltStuff, JoltTraceStep};
+
+use std::fs::File;
+use std::io::Read;
 
 #[derive(Clone)]
 pub struct ReadWriteMemoryPreprocessing {
@@ -244,6 +249,30 @@ fn map_to_polys<F: JoltField, const N: usize>(vals: [&[u64]; N]) -> [DensePolyno
         .unwrap()
 }
 
+pub fn cut_trace<InstructionSet: JoltInstructionSet>(trace: &[JoltTraceStep<InstructionSet>]) -> (Vec<JoltTraceStep<InstructionSet>>, [u32; 32]) {
+    let mut f = File::open("tmp_register_init.bin").expect("Failed to open");
+    let mut buffer = Vec::new();
+    f.read_to_end(&mut buffer).expect("Failed to read");
+    let (_register_init, segment_indecies): ([i64; 32], (usize, usize)) =
+        bincode::deserialize(&buffer).expect("Failed to deserialize");
+
+    let mut trace = trace[segment_indecies.0..segment_indecies.1].to_vec();
+    debug!("trace len: {}", trace.len());
+    JoltTraceStep::pad(&mut trace); // Do we need to pad here?
+    debug!("trace len after pad: {}", trace.len());
+
+    let register_init: [u32; 32] = if segment_indecies.0 != 0 {
+        debug!("overwirte register state by register_init");
+
+        todo!()
+    } else {
+        debug!("segment_indecies.0 == 0, which means the first segment, so no overwriting");
+        [0u32; 32]
+    };
+
+    (trace, register_init)
+}
+
 type RegisterNum = u8;
 type RegisterValue = [u8; 4];
 
@@ -270,31 +299,35 @@ impl<F: JoltField> ReadWriteMemoryPolynomials<F> {
             .unwrap();
 
         let memory_size = max_trace_address.next_power_of_two() as usize;
+        debug!("memory_size: {}", memory_size);
         let mut v_init: Vec<u64> = vec![0; memory_size];
         // todo: remove flag and read file
         // Copy register
         #[cfg(feature = "para")]
-        {
+        let trace = {
             // ここにレジスタの値をロードしていく。その時の順番は、Joltの仕様を参照すること。
             // https://jolt.a16zcrypto.com/how/read_write_memory.html
 
-            let register_init: [u32; 32] = [0u32; 32];
+            println!("in para cfg: trace len: {}", trace.len());
 
-            let mut v_init_index = memory_address_to_witness_index(
-                program_io.memory_layout.input_start,
-                &program_io.memory_layout,
-            );
+            let (trace, register_init) = cut_trace(trace);
 
-            for word in register_init {
+            let mut v_init_index = 0; // ? registerのindexは0から？
+            println!("v_init len: {}", v_init.len());
+
+            for (i, word) in register_init.into_iter().enumerate() {
                 // let mut word = [0u8; 32];
                 // for (i, byte) in reg.iter().enumerate() {
                 //     word[i] = *byte;
                 // }
                 // let word: u32 = u32::from_le_bytes(word);
+                println!("reg {i}");
                 v_init[v_init_index] = word as u64;
                 v_init_index += 1;
             }
-        }
+
+            trace
+        };
 
         // Copy bytecode
         let mut v_init_index = memory_address_to_witness_index(
@@ -319,6 +352,8 @@ impl<F: JoltField> ReadWriteMemoryPolynomials<F> {
             v_init[v_init_index] = word as u64;
             v_init_index += 1;
         }
+
+        debug!("Copied bytecode and inputs");
 
         #[cfg(test)]
         let mut init_tuples: HashSet<(usize, u64, u64)> = HashSet::new();
@@ -354,6 +389,7 @@ impl<F: JoltField> ReadWriteMemoryPolynomials<F> {
         let span = tracing::span!(tracing::Level::DEBUG, "memory_trace_processing");
         let _enter = span.enter();
 
+        debug!("some iter of trace");
         for (i, step) in trace.iter().enumerate() {
             let timestamp = i as u64;
 
@@ -982,17 +1018,17 @@ where
             program_io.memory_layout.input_start,
             &program_io.memory_layout,
         ) as u64;
-        let ignore_start_index =
-            memory_address_to_witness_index(
-                if is_final_segment {
-                    RAM_START_ADDRESS
-                } else {
-                    // 最後のセグメント以外は、outputがまだメモリに書き込まれていないので、その部分はチェックしないようにする。
-                    println!("output_startを挿入");
-                    program_io.memory_layout.output_start 
-                },
-                &program_io.memory_layout) as u64;
-        
+        let ignore_start_index = memory_address_to_witness_index(
+            if is_final_segment {
+                RAM_START_ADDRESS
+            } else {
+                // 最後のセグメント以外は、outputがまだメモリに書き込まれていないので、その部分はチェックしないようにする。
+                println!("output_startを挿入");
+                program_io.memory_layout.output_start
+            },
+            &program_io.memory_layout,
+        ) as u64;
+
         #[cfg(not(feature = "ignore-all-io"))]
         let io_witness_range: Vec<_> = (0..memory_size as u64)
             .map(|i| {
@@ -1003,13 +1039,9 @@ where
                 }
             })
             .collect();
-        
+
         #[cfg(feature = "ignore-all-io")]
-        let io_witness_range: Vec<_> = (0..memory_size as u64)
-            .map(|i| {
-                F::zero()
-            })
-            .collect();
+        let io_witness_range: Vec<_> = (0..memory_size as u64).map(|_i| F::zero()).collect();
 
         let mut v_io: Vec<u64> = vec![0; memory_size];
         // Copy input bytes
@@ -1201,12 +1233,12 @@ where
     ) -> Result<(), ProofVerifyError> {
         let r_eq = transcript.challenge_vector(proof.num_rounds);
 
-        let (sumcheck_claim, r_sumcheck) =
+        let (_sumcheck_claim, r_sumcheck) =
             proof
                 .sumcheck_proof
                 .verify(F::zero(), proof.num_rounds, 3, transcript)?;
 
-        let eq_eval = EqPolynomial::new(r_eq.to_vec()).evaluate(&r_sumcheck);
+        let _eq_eval = EqPolynomial::new(r_eq.to_vec()).evaluate(&r_sumcheck);
 
         let program_io = preprocessing.program_io.as_ref().unwrap();
         let memory_layout = &program_io.memory_layout;
@@ -1223,10 +1255,10 @@ where
         let io_memory_size = ram_start_index as usize;
         let log_io_memory_size = io_memory_size.log_2();
 
-        let output_start_index =
-            memory_address_to_witness_index(
-                program_io.memory_layout.output_start,
-                &program_io.memory_layout);
+        let _output_start_index = memory_address_to_witness_index(
+            program_io.memory_layout.output_start,
+            &program_io.memory_layout,
+        );
 
         let io_witness_range: Vec<_> = (0..io_memory_size)
             .map(|i| {
@@ -1393,7 +1425,7 @@ where
             program_io,
             opening_accumulator,
             transcript,
-            is_final_segment
+            is_final_segment,
         );
 
         let timestamp_validity_proof = TimestampValidityProof::prove(

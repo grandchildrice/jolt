@@ -18,6 +18,12 @@ use std::any::TypeId;
 use strum::{EnumCount, IntoEnumIterator};
 use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
+use std::fs::File;
+
+use log::{debug, info, warn, error};
+use env_logger;
+
+
 use super::{Jolt, JoltCommitments, JoltProof};
 use crate::jolt::instruction::{
     add::ADDInstruction, and::ANDInstruction, beq::BEQInstruction, bge::BGEInstruction,
@@ -187,7 +193,6 @@ pub type RV32IJoltProof<F, PCS, ProofTranscript> =
 
 use crate::utils::transcript::{KeccakTranscript, Transcript};
 use eyre::Result;
-use std::fs::File;
 use std::io::Cursor;
 use std::path::PathBuf;
 
@@ -243,6 +248,8 @@ mod tests {
     use ark_bn254::{Bn254, Fr, G1Projective};
 
     use std::collections::HashSet;
+    use std::fs::File;
+    use std::io::Write;
 
     use crate::field::JoltField;
     use crate::host;
@@ -256,6 +263,9 @@ mod tests {
     use crate::utils::transcript::{KeccakTranscript, Transcript};
     use std::sync::Mutex;
     use strum::{EnumCount, IntoEnumIterator};
+
+    use log::debug;
+    use env_logger;
 
     // If multiple tests try to read the same trace artifacts simultaneously, they will fail
     lazy_static::lazy_static! {
@@ -307,18 +317,57 @@ mod tests {
         let mut program = host::Program::new("fibonacci-guest");
         program.set_input(&9u32);
 
+        env_logger::init();
+
         let segmentation_enable = true;
+
+        // debug!("This is a debug message.");
+
+        let segment_index = 0;
 
         if segmentation_enable {
             let (bytecode, memory_init) = program.decode();
             let (io_device, trace) = {
-                let (io_device, segmentations) = program.segment_trace();
-                (io_device, segmentations[0].1.clone())
+                let (io_device, snapshots, traces) = program.segment_trace();
+                let raw_register_init = snapshots[segment_index].0.clone();
+
+                // セグメントごとに分かれているtraceをひとつにし、そのindexを記録しておく。
+                let mut offset: usize = 0;
+                let mut segment_indecies: Vec<(usize, usize)> = Vec::with_capacity(traces.len());
+                let trace = traces
+                    .into_iter()
+                    .map(|trace_segment| {
+                        let start = offset;
+                        offset += trace_segment.len();
+                        let end = offset;
+                        segment_indecies.push((start, end));
+
+                        // println!("offset: {:?}", offset);
+
+                        trace_segment
+                    })
+                    .flatten()
+                    .collect();
+
+                debug!("segment_indecies: {:?}", segment_indecies);
+
+                // save register_init to a file
+                let encoded = bincode::serialize(&(raw_register_init, segment_indecies[segment_index]))
+                    .expect("Failed to serialize");
+                let mut file = File::create("tmp_register_init.bin").expect("Failed to create");
+                file.write_all(&encoded).expect("Failed to write");
+
+                let (register_init, segment_indecies): ([i64; 32], (usize, usize)) =
+                    bincode::deserialize(&encoded).expect("Failed to deserialize");
+                debug!("register_init: {:?}", register_init);
+                debug!("segment_indecies: {:?}", segment_indecies);
+
+                (io_device, trace)
             };
             drop(artifact_guard);
-    
+
             let is_final_segment = false;
-    
+            debug!("running RV32IJoltVM::preprocess");
             let preprocessing = RV32IJoltVM::preprocess(
                 bytecode.clone(),
                 io_device.memory_layout.clone(),
@@ -327,14 +376,15 @@ mod tests {
                 1 << 20,
                 1 << 20,
             );
+            debug!("running RV32IJoltVM::segment_prove");
             let (proof, commitments, debug_info) =
-            <RV32IJoltVM as Jolt<F, PCS, C, M, ProofTranscript>>::segment_prove(
-                io_device,
-                trace,
-                preprocessing.clone(),
-                is_final_segment, // セグメントの最後か？ もし最後なら、program_ioのoutputのOutputSumcheckProofで一致を証明する。
-            );
-    
+                <RV32IJoltVM as Jolt<F, PCS, C, M, ProofTranscript>>::segment_prove(
+                    io_device,
+                    trace,
+                    preprocessing.clone(),
+                    is_final_segment, // セグメントの最後か？ もし最後なら、program_ioのoutputのOutputSumcheckProofで一致を証明する。
+                );
+
             let verification_result = if is_final_segment {
                 RV32IJoltVM::verify(preprocessing, proof, commitments, debug_info)
             } else {
@@ -350,7 +400,7 @@ mod tests {
             let (bytecode, memory_init) = program.decode();
             let (io_device, trace) = program.trace();
             drop(artifact_guard);
-    
+
             let preprocessing = RV32IJoltVM::preprocess(
                 bytecode.clone(),
                 io_device.memory_layout.clone(),
@@ -365,7 +415,8 @@ mod tests {
                     trace,
                     preprocessing.clone(),
                 );
-            let verification_result = RV32IJoltVM::verify(preprocessing, proof, commitments, debug_info);
+            let verification_result =
+                RV32IJoltVM::verify(preprocessing, proof, commitments, debug_info);
             assert!(
                 verification_result.is_ok(),
                 "Verification failed with error: {:?}",
