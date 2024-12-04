@@ -1229,7 +1229,6 @@ where
         opening_accumulator: &mut VerifierOpeningAccumulator<F, PCS, ProofTranscript>,
         transcript: &mut ProofTranscript,
     ) -> Result<(), ProofVerifyError> {
-        let r_eq = transcript.challenge_vector(proof.num_rounds);
 
         let (_sumcheck_claim, r_sumcheck) =
             proof
