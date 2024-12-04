@@ -254,7 +254,7 @@ pub fn cut_trace<InstructionSet: JoltInstructionSet>(
     let mut f = File::open("tmp_register_init.bin").expect("Failed to open");
     let mut buffer = Vec::new();
     f.read_to_end(&mut buffer).expect("Failed to read");
-    let (_register_init, segment_indecies): ([i64; 32], (usize, usize)) =
+    let (_register_init, segment_indices): ([i64; 32], (usize, usize)) =
         bincode::deserialize(&buffer).expect("Failed to deserialize");
 
     let mut trace = trace[segment_indices.0..segment_indices.1].to_vec();
@@ -262,7 +262,7 @@ pub fn cut_trace<InstructionSet: JoltInstructionSet>(
     JoltTraceStep::pad(&mut trace); // Do we need to pad here?
     debug!("trace len after pad: {}", trace.len());
 
-    let register_init: [u32; 32] = if segment_indecies.0 != 0 {
+    let register_init: [u32; 32] = if segment_indices.0 != 0 {
         debug!("overwirte register state by register_init");
 
         todo!()
