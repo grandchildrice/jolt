@@ -12,7 +12,8 @@ use common::rv_trace::{MemoryLayout, NUM_CIRCUIT_FLAGS};
 use log::debug;
 use read_write_memory::cut_trace;
 use serde::{Deserialize, Serialize};
-use tracing_subscriber::field::debug;
+use std::fs::File;
+use std::io::Write;
 use std::marker::PhantomData;
 use strum::EnumCount;
 use timestamp_range_check::TimestampRangeCheckStuff;
@@ -404,11 +405,31 @@ where
                 ProofTranscript,
             >::generate_witness(&preprocessing.instruction_lookups, &trace);
 
+        let mut serialized_instruction_polynomials = Vec::new();
+        instruction_polynomials
+            .serialize_compressed(&mut serialized_instruction_polynomials)
+            .unwrap();
+
+        let mut file = File::create("instruction_polynomials.json").unwrap();
+        file.write_all(&serialized_instruction_polynomials).unwrap();
+
+        println!("Data serialized and written to instruction_polynomials.json");
+
         let (memory_polynomials, read_timestamps) = ReadWriteMemoryPolynomials::generate_witness(
             &program_io,
             &preprocessing.read_write_memory,
             &trace,
         );
+
+        let mut serialized_memory_polynomials = Vec::new();
+        memory_polynomials
+            .serialize_compressed(&mut serialized_memory_polynomials)
+            .unwrap();
+
+        let mut file = File::create("memory_polynomials.json").unwrap();
+        file.write_all(&serialized_memory_polynomials).unwrap();
+
+        println!("Data serialized and written to memory_polynomials.json");
 
         let (bytecode_polynomials, range_check_polys) = rayon::join(
             || {
