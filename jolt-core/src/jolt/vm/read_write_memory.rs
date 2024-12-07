@@ -254,7 +254,7 @@ pub fn cut_trace<InstructionSet: JoltInstructionSet>(
     let mut f = File::open("tmp_register_init.bin").expect("Failed to open");
     let mut buffer = Vec::new();
     f.read_to_end(&mut buffer).expect("Failed to read");
-    let (_register_init, segment_indices): ([i64; 32], (usize, usize)) =
+    let (register_init, segment_indices): ([i64; 32], (usize, usize)) =
         bincode::deserialize(&buffer).expect("Failed to deserialize");
 
     let mut trace = trace[segment_indices.0..segment_indices.1].to_vec();
@@ -263,9 +263,13 @@ pub fn cut_trace<InstructionSet: JoltInstructionSet>(
     debug!("trace len after pad: {}", trace.len());
 
     let register_init: [u32; 32] = if segment_indices.0 != 0 {
-        debug!("overwirte register state by register_init");
-
-        todo!()
+        debug!("overwrite register state by register_init");
+        let converted_register_init: [u32; 32] = register_init.map(|value| {
+            let truncated = value as i32;
+            let bytes = truncated.to_le_bytes();
+            u32::from_le_bytes(bytes)
+        });
+        converted_register_init
     } else {
         debug!("segment_indices.0 == 0, which means the first segment, so no overwriting");
         [0u32; 32]
