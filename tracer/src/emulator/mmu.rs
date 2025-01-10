@@ -32,7 +32,7 @@ pub struct Mmu {
     ppn: u64,
     addressing_mode: AddressingMode,
     privilege_mode: PrivilegeMode,
-    memory: MemoryWrapper,
+    pub(crate) memory: MemoryWrapper,
     dtb: Vec<u8>,
     disk: VirtioBlockDisk,
     plic: Plic,
@@ -1144,7 +1144,7 @@ impl Mmu {
 /// [`Memory`](../memory/struct.Memory.html) wrapper. Converts physical address to the one in memory
 /// using [`DRAM_BASE`](constant.DRAM_BASE.html) and accesses [`Memory`](../memory/struct.Memory.html).
 pub struct MemoryWrapper {
-    memory: Memory,
+    pub(crate) memory: Memory,
     tracer: Rc<Tracer>,
 }
 

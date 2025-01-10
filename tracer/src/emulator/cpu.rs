@@ -8,6 +8,7 @@ use std::str::FromStr;
 
 use crate::trace::Tracer;
 use common::rv_trace::*;
+use common::constants::TRACE_SEGMENTATION_SIZE;
 
 use self::fnv::FnvHashMap;
 
@@ -84,6 +85,7 @@ pub struct Cpu {
     decode_cache: DecodeCache,
     unsigned_data_mask: u64,
     pub tracer: Rc<Tracer>,
+    pub snapshots: Vec<([i64; 32], Vec<u64>, u64)>
 }
 
 #[derive(Clone)]
@@ -245,6 +247,7 @@ impl Cpu {
             decode_cache: DecodeCache::new(),
             unsigned_data_mask: 0xffffffffffffffff,
             tracer,
+            snapshots: Vec::new(),
         };
         cpu.x[0xb] = 0x1020; // I don't know why but Linux boot seems to require this initialization
         cpu.write_csr_raw(CSR_MISA_ADDRESS, 0x800000008014312f);
@@ -298,6 +301,18 @@ impl Cpu {
         }
         self.mmu.tick(&mut self.csr[CSR_MIP_ADDRESS as usize]);
         self.handle_interrupt(self.pc);
+
+        #[cfg(feature = "trace-segmentation")]
+        {
+            if self.clock % TRACE_SEGMENTATION_SIZE == 0 {
+                let register_snapshot = self.x.clone();
+                let ram_snapshot = self.mmu.memory.memory.data.clone();
+                println!("clock: {}, reg: {:?}, ram: {}", self.clock, register_snapshot, ram_snapshot.len());
+                self.snapshots.push((register_snapshot, ram_snapshot, self.pc));
+            }
+
+        }
+
         self.clock = self.clock.wrapping_add(1);
 
         // cpu core clock : mtime clock in clint = 8 : 1 is

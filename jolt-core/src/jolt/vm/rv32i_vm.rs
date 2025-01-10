@@ -18,6 +18,18 @@ use std::any::TypeId;
 use strum::{EnumCount, IntoEnumIterator};
 use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 
+use env_logger;
+use std::fs::File;
+use std::sync::Once;
+
+static INIT: Once = Once::new();
+
+fn initialize_logger() {
+    INIT.call_once(|| {
+        env_logger::init();
+    });
+}
+
 use super::{Jolt, JoltCommitments, JoltProof};
 use crate::jolt::instruction::{
     add::ADDInstruction, and::ANDInstruction, beq::BEQInstruction, bge::BGEInstruction,
@@ -187,7 +199,6 @@ pub type RV32IJoltProof<F, PCS, ProofTranscript> =
 
 use crate::utils::transcript::{KeccakTranscript, Transcript};
 use eyre::Result;
-use std::fs::File;
 use std::io::Cursor;
 use std::path::PathBuf;
 
@@ -243,6 +254,8 @@ mod tests {
     use ark_bn254::{Bn254, Fr, G1Projective};
 
     use std::collections::HashSet;
+    use std::fs::File;
+    use std::io::Write;
 
     use crate::field::JoltField;
     use crate::host;
@@ -257,10 +270,23 @@ mod tests {
     use std::sync::Mutex;
     use strum::{EnumCount, IntoEnumIterator};
 
+    use env_logger;
+    use log::debug;
+
     // If multiple tests try to read the same trace artifacts simultaneously, they will fail
     lazy_static::lazy_static! {
         static ref FIB_FILE_LOCK: Mutex<()> = Mutex::new(());
         static ref SHA3_FILE_LOCK: Mutex<()> = Mutex::new(());
+    }
+
+    use std::sync::Once;
+
+    static INIT: Once = Once::new();
+
+    fn initialize_logger() {
+        INIT.call_once(|| {
+            env_logger::init();
+        });
     }
 
     fn test_instruction_set_subtables<PCS, ProofTranscript>()
@@ -306,41 +332,126 @@ mod tests {
         let artifact_guard = FIB_FILE_LOCK.lock().unwrap();
         let mut program = host::Program::new("fibonacci-guest");
         program.set_input(&9u32);
-        let (bytecode, memory_init) = program.decode();
-        let (io_device, trace) = program.trace();
-        drop(artifact_guard);
 
-        let preprocessing = RV32IJoltVM::preprocess(
-            bytecode.clone(),
-            io_device.memory_layout.clone(),
-            memory_init,
-            1 << 20,
-            1 << 20,
-            1 << 20,
-        );
-        let (proof, commitments, debug_info) =
-            <RV32IJoltVM as Jolt<F, PCS, C, M, ProofTranscript>>::prove(
-                io_device,
-                trace,
-                preprocessing.clone(),
+        initialize_logger();
+
+        let segmentation_enable = true;
+
+        // debug!("This is a debug message.");
+
+        let segment_index = 0;
+
+        if segmentation_enable {
+            let (bytecode, memory_init) = program.decode();
+            let (io_device, trace) = {
+                let (io_device, snapshots, traces) = program.segment_trace();
+                let raw_register_init = snapshots[segment_index].0.clone();
+
+                // セグメントごとに分かれているtraceをひとつにし、そのindexを記録しておく。
+                let mut offset: usize = 0;
+                let mut segment_indices: Vec<(usize, usize)> = Vec::with_capacity(traces.len());
+                let trace = traces
+                    .into_iter()
+                    .map(|trace_segment| {
+                        let start = offset;
+                        offset += trace_segment.len();
+                        let end = offset;
+                        segment_indices.push((start, end));
+
+                        // println!("offset: {:?}", offset);
+
+                        trace_segment
+                    })
+                    .flatten()
+                    .collect();
+
+                debug!("segment_indices: {:?}", segment_indices);
+
+                // save register_init to a file
+                let encoded =
+                    bincode::serialize(&(raw_register_init, segment_indices[segment_index]))
+                        .expect("Failed to serialize");
+                let mut file = File::create("tmp_register_init.bin").expect("Failed to create");
+                file.write_all(&encoded).expect("Failed to write");
+
+                let (register_init, segment_indices): ([i64; 32], (usize, usize)) =
+                    bincode::deserialize(&encoded).expect("Failed to deserialize");
+                debug!("register_init: {:?}", register_init);
+                debug!("segment_indices: {:?}", segment_indices);
+
+                (io_device, trace)
+            };
+            drop(artifact_guard);
+
+            let is_final_segment = false;
+            debug!("running RV32IJoltVM::preprocess");
+            let preprocessing = RV32IJoltVM::preprocess(
+                bytecode.clone(),
+                io_device.memory_layout.clone(),
+                memory_init,
+                1 << 20,
+                1 << 20,
+                1 << 20,
             );
-        let verification_result =
-            RV32IJoltVM::verify(preprocessing, proof, commitments, debug_info);
-        assert!(
-            verification_result.is_ok(),
-            "Verification failed with error: {:?}",
-            verification_result.err()
-        );
+            debug!("running RV32IJoltVM::segment_prove");
+            let (proof, commitments, debug_info) =
+                <RV32IJoltVM as Jolt<F, PCS, C, M, ProofTranscript>>::segment_prove(
+                    io_device,
+                    trace,
+                    preprocessing.clone(),
+                    is_final_segment, // セグメントの最後か？ もし最後なら、program_ioのoutputのOutputSumcheckProofで一致を証明する。
+                );
+
+            let verification_result = if is_final_segment {
+                RV32IJoltVM::verify(preprocessing, proof, commitments, debug_info)
+            } else {
+                RV32IJoltVM::segment_verify(preprocessing, proof, commitments, debug_info)
+            };
+            // let verification_result = RV32IJoltVM::verify(preprocessing, proof, commitments, debug_info);
+            assert!(
+                verification_result.is_ok(),
+                "Verification failed with error: {:?}",
+                verification_result.err()
+            );
+        } else {
+            let (bytecode, memory_init) = program.decode();
+            let (io_device, trace) = program.trace();
+            drop(artifact_guard);
+
+            let preprocessing = RV32IJoltVM::preprocess(
+                bytecode.clone(),
+                io_device.memory_layout.clone(),
+                memory_init,
+                1 << 20,
+                1 << 20,
+                1 << 20,
+            );
+            let (proof, commitments, debug_info) =
+                <RV32IJoltVM as Jolt<F, PCS, C, M, ProofTranscript>>::prove(
+                    io_device,
+                    trace,
+                    preprocessing.clone(),
+                );
+            let verification_result =
+                RV32IJoltVM::verify(preprocessing, proof, commitments, debug_info);
+            assert!(
+                verification_result.is_ok(),
+                "Verification failed with error: {:?}",
+                verification_result.err()
+            );
+        }
     }
 
     #[test]
     fn fib_e2e_mock() {
+        initialize_logger();
         fib_e2e::<Fr, MockCommitScheme<Fr, KeccakTranscript>, KeccakTranscript>();
     }
 
     #[ignore = "Opening proof reduction for Hyrax doesn't work right now"]
     #[test]
     fn fib_e2e_hyrax() {
+        initialize_logger();
         fib_e2e::<
             ark_bn254::Fr,
             HyraxScheme<ark_bn254::G1Projective, KeccakTranscript>,
@@ -350,11 +461,13 @@ mod tests {
 
     #[test]
     fn fib_e2e_zeromorph() {
+        initialize_logger();
         fib_e2e::<Fr, Zeromorph<Bn254, KeccakTranscript>, KeccakTranscript>();
     }
 
     #[test]
     fn fib_e2e_hyperkzg() {
+        initialize_logger();
         fib_e2e::<Fr, HyperKZG<Bn254, KeccakTranscript>, KeccakTranscript>();
     }
 

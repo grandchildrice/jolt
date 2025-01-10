@@ -22,3 +22,7 @@ temp_file
 # ide
 .idea
 .vscode
+
+tmp_register_init.bin
+/jolt-core/instruction_polynomials.json
+/jolt-core/memory_polynomials.json
