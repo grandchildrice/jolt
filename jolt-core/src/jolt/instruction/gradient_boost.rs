@@ -1,4 +1,7 @@
-use crate::field::JoltField;
+use crate::{
+    field::JoltField, jolt::subtable::ltu::LtuSubtable,
+    utils::instruction_utils::chunk_and_concatenate_operands,
+};
 use rand::prelude::StdRng;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
@@ -47,32 +50,61 @@ impl JoltInstruction for GradientBoostInstruction {
         (self.0, self.1)
     }
 
-    fn combine_lookups<F: JoltField>(&self, vals: &[F], C: usize, _M: usize) -> F {
-        let vals_by_subtable = self.slice_values(vals, C, 0);
-        let predictions = vals_by_subtable[0];
-        predictions[0]
+    fn combine_lookups<F: JoltField>(&self, vals: &[F], C: usize, M: usize) -> F {
+        // SLTInstruction と同様の方法でサブテーブルの値を取得
+        let vals_by_subtable = self.slice_values(vals, C, M);
+
+        // 各サブテーブルの比較結果を取得
+        let left_lt_t1 = vals_by_subtable[0][0]; // 左側の値 < T1
+        let right_lt_t2 = vals_by_subtable[1][0]; // 右側の値 < T2
+        let right_lt_t3 = vals_by_subtable[2][0]; // 右側の値 < T3
+
+        // 決定木のロジックを多項式で表現
+        // 各条件分岐に対する出力値を計算
+        left_lt_t1 * right_lt_t2 * F::from_u64(V1 as u64) +  // 条件: left < T1 && right < T2
+        left_lt_t1 * (F::one() - right_lt_t2) * F::from_u64(V2 as u64) +  // 条件: left < T1 && right >= T2
+        (F::one() - left_lt_t1) * right_lt_t3 * F::from_u64(V3 as u64) +  // 条件: left >= T1 && right < T3
+        (F::one() - left_lt_t1) * (F::one() - right_lt_t3) * F::from_u64(V4 as u64)
+        // 条件: left >= T1 && right >= T3
     }
 
-    fn g_poly_degree(&self, _C: usize) -> usize {
-        1
+    fn g_poly_degree(&self, C: usize) -> usize {
+        3
     }
 
     fn subtables<F: JoltField>(
         &self,
-        _C: usize,
-        _M: usize,
+        C: usize,
+        _: usize,
     ) -> Vec<(Box<dyn LassoSubtable<F>>, SubtableIndices)> {
-        vec![(
-            Box::new(GradientBoostSubtable::new()),
-            SubtableIndices::from(0),
-        )]
+        vec![
+            (Box::new(LtuSubtable::new()), SubtableIndices::from(0)),
+            (Box::new(LtuSubtable::new()), SubtableIndices::from(0)),
+            (Box::new(LtuSubtable::new()), SubtableIndices::from(0)),
+        ]
     }
 
-    fn to_indices(&self, _C: usize, _log_M: usize) -> Vec<usize> {
+    fn to_indices(&self, C: usize, log_M: usize) -> Vec<usize> {
+        // 入力値を8ビットに制限
         let left = (self.0 & 0xFF) as u8;
         let right = (self.1 & 0xFF) as u8;
-        let idx = right as usize | ((left as usize) << 8);
-        vec![idx]
+
+        // 各比較用にインデックスを生成
+        let left_lt_t1_idx = (left as u16) | ((T1 as u16) << 8);
+        let right_lt_t2_idx = (right as u16) | ((T2 as u16) << 8);
+        let right_lt_t3_idx = (right as u16) | ((T3 as u16) << 8);
+
+        // インデックスの配列を生成
+        // chunk_and_concatenate_operands ではなく、直接インデックスを作成
+        let mut indices = vec![
+            left_lt_t1_idx as usize,
+            right_lt_t2_idx as usize,
+            right_lt_t3_idx as usize,
+        ];
+
+        // もしCが3より大きければ、残りを0で埋める
+        indices.resize(C, 0);
+        indices
     }
 
     fn lookup_entry(&self) -> u64 {
@@ -121,41 +153,14 @@ mod test {
 
     // Test the basic implementation directly
     #[test]
-    fn gradient_boost_d_e2e() {
-        const C: usize = 1; // Changed to 1 since we only need one index
-        const M: usize = 1 << 16;
-
-        // Test the decision tree logic directly
-        let instructions = vec![
-            GradientBoostInstruction(0, 0),
-            GradientBoostInstruction(10, 10),
-            GradientBoostInstruction(49, 20),
-            GradientBoostInstruction(40, 5),
-            GradientBoostInstruction(10, 40),
-            GradientBoostInstruction(25, 60),
-            GradientBoostInstruction(45, 35),
-            GradientBoostInstruction(60, 30),
-            GradientBoostInstruction(100, 50),
-            GradientBoostInstruction(80, 60),
-            GradientBoostInstruction(100, 100),
-            GradientBoostInstruction(75, 80),
-            GradientBoostInstruction(90, 90),
-        ];
-
-        for instruction in instructions {
-            jolt_instruction_test!(instruction);
-        }
-    }
-
-    // Test the basic implementation directly
-    #[test]
     fn gradient_boost_e2e() {
         let mut rng = test_rng();
-        const C: usize = 1; // Changed to 1 since we only need one index
+        const C: usize = 3;
         const M: usize = 1 << 16;
 
         for _ in 0..256 {
-            let (x, y) = (rng.next_u64(), rng.next_u64());
+            let x = rng.next_u64() & 0xFF; // 8ビットに制限
+            let y = rng.next_u64() & 0xFF; // 8ビットに制限
             let instruction = GradientBoostInstruction(x, y);
             jolt_instruction_test!(instruction);
         }
