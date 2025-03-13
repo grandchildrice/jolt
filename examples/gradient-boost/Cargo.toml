@@ -1,0 +1,11 @@
+[package]
+name = "gradient-boost"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+jolt-sdk = { path = "../../jolt-sdk", features = ["host"] }
+guest = { package = "gradient-boost-guest", path = "./guest" }
+
+[features]
+icicle = ["jolt-sdk/icicle"]
