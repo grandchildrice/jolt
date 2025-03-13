@@ -617,6 +617,10 @@ where
     type Leaves = ();
     type Config = ();
 
+    fn concat_leaves(_leaves: &[Self::Leaves]) -> Self::Leaves {
+        ()
+    }
+
     fn construct(_leaves: Self::Leaves) -> Self {
         unimplemented!("init/final grand products are batched with read/write grand products");
     }

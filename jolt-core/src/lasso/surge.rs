@@ -25,7 +25,7 @@ use crate::{
     utils::{errors::ProofVerifyError, math::Math, transcript::Transcript},
 };
 
-#[derive(Default, CanonicalSerialize, CanonicalDeserialize)]
+#[derive(Default, Clone, CanonicalSerialize, CanonicalDeserialize)]
 pub struct SurgeStuff<T: CanonicalSerialize + CanonicalDeserialize> {
     /// C-sized vector of `dim_i` polynomials/commitments/openings
     pub(crate) dim: Vec<T>,
@@ -192,6 +192,53 @@ where
             (read_write_leaves.concat(), 2 * Self::num_memories()),
             (init_final_leaves.concat(), 2 * Self::num_memories()),
         )
+    }
+
+    #[tracing::instrument(skip_all, name = "ReadWriteMemory::compute_leaves")]
+    fn compute_leaves_batched<'a>(
+        preprocessing: &Self::Preprocessing,
+        polynomials_array: &[Self::Polynomials],
+        jolt_polynomials_array: &'a [JoltPolynomials<F>],
+        gamma: &F,
+        tau: &F,
+    ) -> ((Vec<F>, usize), (Vec<F>, usize)) {
+        let mut read_write_leaves_singles = Vec::new();
+        let mut init_final_leaves_singles = Vec::new();
+
+        for (polynomials, jolt_polynomials) in
+            polynomials_array.iter().zip(jolt_polynomials_array.iter())
+        {
+            let (read_write_leaves_single, init_final_leaves_single) =
+                Self::compute_leaves(preprocessing, polynomials, jolt_polynomials, &gamma, &tau);
+            read_write_leaves_singles.push(read_write_leaves_single);
+            init_final_leaves_singles.push(init_final_leaves_single);
+        }
+
+        let leaves_len = read_write_leaves_singles[0].0.len();
+        let array_len = read_write_leaves_singles.len();
+        let mut read_write_leaves_vec = Vec::new();
+        for i in 0..leaves_len {
+            let mut elem = F::one();
+            for j in 0..array_len {
+                elem *= read_write_leaves_singles[j].0[i];
+            }
+            read_write_leaves_vec.push(elem);
+        }
+        let read_write_leaves = (read_write_leaves_vec, read_write_leaves_singles[0].1);
+
+        let leaves_len = init_final_leaves_singles[0].0.len();
+        let array_len = init_final_leaves_singles.len();
+        let mut init_final_leaves_vec = Vec::new();
+        for i in 0..leaves_len {
+            let mut elem = F::one();
+            for j in 0..array_len {
+                elem *= init_final_leaves_singles[j].0[i];
+            }
+            init_final_leaves_vec.push(elem);
+        }
+        let init_final_leaves = (init_final_leaves_vec, init_final_leaves_singles[0].1);
+
+        (read_write_leaves, init_final_leaves)
     }
 
     fn protocol_name() -> &'static [u8] {
@@ -498,6 +545,125 @@ where
         (proof, debug_info)
     }
 
+    #[tracing::instrument(skip_all, name = "Surge::prove")]
+    pub fn prove_batch_test(
+        preprocessing: &SurgePreprocessing<F, Instruction, C, M>,
+        generators: &PCS::Setup,
+        ops: Vec<Instruction>,
+    ) -> (Self, Option<ProverDebugInfo<F, ProofTranscript>>) {
+        let mut transcript = ProofTranscript::new(b"Surge transcript");
+        let mut opening_accumulator: ProverOpeningAccumulator<F, ProofTranscript> =
+            ProverOpeningAccumulator::new();
+        let protocol_name = Self::protocol_name();
+        transcript.append_message(protocol_name);
+
+        let num_lookups = ops.len().next_power_of_two();
+        let polynomials = Self::generate_witness(preprocessing, &ops);
+
+        let mut commitments = SurgeCommitments::<PCS, ProofTranscript>::initialize(preprocessing);
+        let trace_polys = polynomials.read_write_values();
+        let trace_comitments =
+            PCS::batch_commit_polys_ref(&trace_polys, generators, BatchType::SurgeReadWrite);
+        commitments
+            .read_write_values_mut()
+            .into_iter()
+            .zip(trace_comitments.into_iter())
+            .for_each(|(dest, src)| *dest = src);
+        commitments.final_cts = PCS::batch_commit_polys(
+            &polynomials.final_cts,
+            generators,
+            BatchType::SurgeInitFinal,
+        );
+
+        let num_rounds = num_lookups.log_2();
+        let instruction = Instruction::default();
+
+        // TODO(sragss): Commit some of this stuff to transcript?
+
+        // Primary sumcheck
+        let r_primary_sumcheck = transcript.challenge_vector(num_rounds);
+        let eq: DensePolynomial<F> = DensePolynomial::new(EqPolynomial::evals(&r_primary_sumcheck));
+        let sumcheck_claim: F = Self::compute_primary_sumcheck_claim(&polynomials, &eq);
+
+        transcript.append_scalar(&sumcheck_claim);
+        let mut combined_sumcheck_polys = polynomials.E_polys.clone();
+        combined_sumcheck_polys.push(eq);
+
+        let combine_lookups_eq = |vals: &[F]| -> F {
+            let vals_no_eq: &[F] = &vals[0..(vals.len() - 1)];
+            let eq = vals[vals.len() - 1];
+            instruction.combine_lookups(vals_no_eq, C, M) * eq
+        };
+
+        let (primary_sumcheck_proof, r_z, mut sumcheck_openings) =
+            SumcheckInstanceProof::<F, ProofTranscript>::prove_arbitrary::<_>(
+                &sumcheck_claim,
+                num_rounds,
+                &mut combined_sumcheck_polys,
+                combine_lookups_eq,
+                instruction.g_poly_degree(C) + 1, // combined degree + eq term
+                &mut transcript,
+            );
+
+        // Remove EQ
+        let _ = combined_sumcheck_polys.pop();
+        let _ = sumcheck_openings.pop();
+        opening_accumulator.append(
+            &polynomials.E_polys.iter().collect::<Vec<_>>(),
+            DensePolynomial::new(EqPolynomial::evals(&r_z)),
+            r_z.clone(),
+            &sumcheck_openings.iter().collect::<Vec<_>>(),
+            &mut transcript,
+        );
+
+        let primary_sumcheck = SurgePrimarySumcheck {
+            claimed_evaluation: sumcheck_claim,
+            sumcheck_proof: primary_sumcheck_proof,
+            num_rounds,
+            E_poly_openings: sumcheck_openings,
+            _marker: PhantomData,
+        };
+
+        let memory_checking = SurgeProof::prove_memory_checking_batched(
+            generators,
+            preprocessing,
+            &[polynomials.clone(), polynomials],
+            &[JoltPolynomials::default(), JoltPolynomials::default()], // Hack: required by the memory-checking trait, but unused in Surge
+            &mut opening_accumulator,
+            &mut transcript,
+        );
+
+        let proof = SurgeProof {
+            _instruction: PhantomData,
+            commitments,
+            primary_sumcheck,
+            memory_checking,
+        };
+        #[cfg(test)]
+        let debug_info = Some(ProverDebugInfo {
+            transcript,
+            opening_accumulator,
+        });
+        #[cfg(not(test))]
+        let debug_info = None;
+
+        (proof, debug_info)
+    }
+
+    #[tracing::instrument(skip_all, name = "Surge::prove")]
+    pub fn prove_with_batch_gkr(
+        preprocessing: &SurgePreprocessing<F, Instruction, C, M>,
+        generators: &PCS::Setup,
+        ops_vec: Vec<Vec<Instruction>>,
+    ) -> Vec<(Self, Option<ProverDebugInfo<F, ProofTranscript>>)> {
+        let proofs = ops_vec
+            .into_par_iter()
+            .map(|ops| Self::prove(&preprocessing, &generators, ops))
+            .collect();
+
+        proofs
+    }
+
     pub fn verify(
         preprocessing: &SurgePreprocessing<F, Instruction, C, M>,
         generators: &PCS::Setup,
@@ -678,6 +844,7 @@ mod tests {
     use ark_bn254::{Bn254, Fr};
     use ark_std::test_rng;
     use rand_core::RngCore;
+    use rayon::prelude::*;
 
     #[test]
     fn surge_32_e2e() {
@@ -703,6 +870,37 @@ mod tests {
             M,
             KeccakTranscript,
         >::prove(&preprocessing, &generators, ops);
+
+        SurgeProof::verify(&preprocessing, &generators, proof, debug_info).expect("should work");
+    }
+
+    #[test]
+    fn surge_32_batch_e2e() {
+        let mut rng = test_rng();
+        const WORD_SIZE: usize = 32;
+        const C: usize = 4;
+        const M: usize = 1 << 16;
+        const NUM_OPS: usize = 1024;
+
+        let ops = std::iter::repeat_with(|| {
+            XORInstruction::<WORD_SIZE>(rng.next_u32() as u64, rng.next_u32() as u64)
+        })
+        .take(NUM_OPS)
+        .collect();
+
+        let preprocessing = SurgePreprocessing::preprocess();
+        let generators = HyperKZG::<_, KeccakTranscript>::setup(&[CommitShape::new(
+            M,
+            BatchType::SurgeReadWrite,
+        )]);
+        let (proof, debug_info) = SurgeProof::<
+            Fr,
+            HyperKZG<Bn254, KeccakTranscript>,
+            XORInstruction<WORD_SIZE>,
+            C,
+            M,
+            KeccakTranscript,
+        >::prove_batch_test(&preprocessing, &generators, ops);
 
         SurgeProof::verify(&preprocessing, &generators, proof, debug_info).expect("should work");
     }
@@ -734,5 +932,45 @@ mod tests {
         >::prove(&preprocessing, &generators, ops);
 
         SurgeProof::verify(&preprocessing, &generators, proof, debug_info).expect("should work");
+    }
+
+    #[test]
+    fn surge_32_batch() {
+        let mut rng = test_rng();
+        const WORD_SIZE: usize = 32;
+        const C: usize = 4;
+        const M: usize = 1 << 16;
+        const NUM_OPS: usize = 1024;
+
+        let ops1 = std::iter::repeat_with(|| {
+            XORInstruction::<WORD_SIZE>(rng.next_u32() as u64, rng.next_u32() as u64)
+        })
+        .take(NUM_OPS)
+        .collect();
+
+        let ops2 = std::iter::repeat_with(|| {
+            XORInstruction::<WORD_SIZE>(rng.next_u32() as u64, rng.next_u32() as u64)
+        })
+        .take(NUM_OPS)
+        .collect();
+
+        let preprocessing = SurgePreprocessing::preprocess();
+        let generators = HyperKZG::<_, KeccakTranscript>::setup(&[CommitShape::new(
+            M,
+            BatchType::SurgeReadWrite,
+        )]);
+        let proofs = SurgeProof::<
+            Fr,
+            HyperKZG<Bn254, KeccakTranscript>,
+            XORInstruction<WORD_SIZE>,
+            C,
+            M,
+            KeccakTranscript,
+        >::prove_with_batch_gkr(&preprocessing, &generators, vec![ops1, ops2]);
+
+        proofs.into_par_iter().for_each(|(proof, debug_info)| {
+            SurgeProof::verify(&preprocessing, &generators, proof, debug_info)
+                .expect("Verification failed");
+        });
     }
 }
