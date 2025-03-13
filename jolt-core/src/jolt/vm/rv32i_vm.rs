@@ -21,20 +21,21 @@ use strum_macros::{EnumCount as EnumCountMacro, EnumIter};
 use super::{Jolt, JoltCommitments, JoltProof};
 use crate::jolt::instruction::{
     add::ADDInstruction, and::ANDInstruction, beq::BEQInstruction, bge::BGEInstruction,
-    bgeu::BGEUInstruction, bne::BNEInstruction, mul::MULInstruction, mulhu::MULHUInstruction,
-    mulu::MULUInstruction, or::ORInstruction, sll::SLLInstruction, slt::SLTInstruction,
-    sltu::SLTUInstruction, sra::SRAInstruction, srl::SRLInstruction, sub::SUBInstruction,
-    virtual_advice::ADVICEInstruction, virtual_assert_lte::ASSERTLTEInstruction,
+    bgeu::BGEUInstruction, bne::BNEInstruction, gradient_boost::GradientBoostInstruction,
+    mul::MULInstruction, mulhu::MULHUInstruction, mulu::MULUInstruction, or::ORInstruction,
+    sll::SLLInstruction, slt::SLTInstruction, sltu::SLTUInstruction, sra::SRAInstruction,
+    srl::SRLInstruction, sub::SUBInstruction, virtual_advice::ADVICEInstruction,
+    virtual_assert_lte::ASSERTLTEInstruction,
     virtual_assert_valid_signed_remainder::AssertValidSignedRemainderInstruction,
     virtual_movsign::MOVSIGNInstruction, xor::XORInstruction, JoltInstruction, JoltInstructionSet,
     SubtableIndices,
 };
 use crate::jolt::subtable::{
-    and::AndSubtable, eq::EqSubtable, eq_abs::EqAbsSubtable, identity::IdentitySubtable,
-    left_is_zero::LeftIsZeroSubtable, left_msb::LeftMSBSubtable, lt_abs::LtAbsSubtable,
-    ltu::LtuSubtable, or::OrSubtable, right_msb::RightMSBSubtable, sign_extend::SignExtendSubtable,
-    sll::SllSubtable, sra_sign::SraSignSubtable, srl::SrlSubtable, xor::XorSubtable,
-    JoltSubtableSet, LassoSubtable, SubtableId,
+    and::AndSubtable, eq::EqSubtable, eq_abs::EqAbsSubtable, gradient_boost::GradientBoostSubtable,
+    identity::IdentitySubtable, left_is_zero::LeftIsZeroSubtable, left_msb::LeftMSBSubtable,
+    lt_abs::LtAbsSubtable, ltu::LtuSubtable, or::OrSubtable, right_msb::RightMSBSubtable,
+    sign_extend::SignExtendSubtable, sll::SllSubtable, sra_sign::SraSignSubtable, srl::SrlSubtable,
+    xor::XorSubtable, JoltSubtableSet, LassoSubtable, SubtableId,
 };
 use crate::poly::commitment::commitment_scheme::CommitmentScheme;
 
@@ -131,7 +132,8 @@ instruction_set!(
   VIRTUAL_ASSERT_VALID_UNSIGNED_REMAINDER: AssertValidUnsignedRemainderInstruction<WORD_SIZE>,
   VIRTUAL_ASSERT_VALID_DIV0: AssertValidDiv0Instruction<WORD_SIZE>,
   VIRTUAL_ASSERT_HALFWORD_ALIGNMENT: AssertAlignedMemoryAccessInstruction<WORD_SIZE, 2>,
-  VIRTUAL_ASSERT_WORD_ALIGNMENT: AssertAlignedMemoryAccessInstruction<WORD_SIZE, 4>
+  VIRTUAL_ASSERT_WORD_ALIGNMENT: AssertAlignedMemoryAccessInstruction<WORD_SIZE, 4>,
+  GBDT_INFER: GradientBoostInstruction
 );
 subtable_enum!(
   RV32ISubtables,
@@ -159,7 +161,8 @@ subtable_enum!(
   RIGHT_IS_ZERO: RightIsZeroSubtable<F>,
   DIV_BY_ZERO: DivByZeroSubtable<F>,
   LSB: LowBitSubtable<F, 0>,
-  SECOND_LEAST_SIGNIFICANT_BIT: LowBitSubtable<F, 1>
+  SECOND_LEAST_SIGNIFICANT_BIT: LowBitSubtable<F, 1>,
+  GBDT_INFER: GradientBoostSubtable<F>
 );
 
 // ==================== JOLT ====================
