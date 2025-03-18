@@ -669,7 +669,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::SurgePreprocessing;
-    use crate::jolt::instruction::gradient_boost::GradientBoostInstruction;
     use crate::utils::transcript::KeccakTranscript;
     use crate::{
         jolt::instruction::xor::XORInstruction,
@@ -707,31 +706,6 @@ mod tests {
 
         SurgeProof::verify(&preprocessing, &generators, proof, debug_info).expect("should work");
     }
-
-    // #[test]
-    // fn surge_gbm_e2e() {
-    //     let mut rng = test_rng();
-    //     const C: usize = 1;
-    //     const M: usize = 1 << 16;
-    //     const NUM_OPS: usize = 1024;
-    //     let ops =
-    //         std::iter::repeat_with(|| GradientBoostInstruction(rng.next_u64(), rng.next_u64()))
-    //             .take(NUM_OPS)
-    //             .collect();
-
-    //     let preprocessing = SurgePreprocessing::preprocess();
-    //     let generators = HyperKZG::<_, KeccakTranscript>::setup(M);
-    //     let (proof, debug_info) = SurgeProof::<
-    //         Fr,
-    //         HyperKZG<Bn254, KeccakTranscript>,
-    //         GradientBoostInstruction,
-    //         C,
-    //         M,
-    //         KeccakTranscript,
-    //     >::prove(&preprocessing, &generators, ops);
-
-    //     SurgeProof::verify(&preprocessing, &generators, proof, debug_info).expect("should work");
-    // }
 
     #[test]
     fn surge_32_e2e_non_pow_2() {
