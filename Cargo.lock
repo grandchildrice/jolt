@@ -1311,6 +1311,7 @@ version = "0.1.0"
 dependencies = [
  "gradient-boost-guest",
  "jolt-sdk",
+ "rand 0.7.3",
 ]
 
 [[package]]

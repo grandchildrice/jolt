@@ -5,24 +5,26 @@ use super::VirtualInstructionSequence;
 use crate::jolt::instruction::{
     // add::ADDInstruction, beq::BEQInstruction, mul::MULInstruction,
     virtual_advice::ADVICEInstruction,
+    virtual_assert_lte::ASSERTLTEInstruction,
     JoltInstruction,
 };
+
+// Threshold constants for comparison - must match subtable
+const T1: u64 = 50; // Threshold for splitting feature1
+const T2: u64 = 30; // Next threshold when feature1 < T1
+const T3: u64 = 70; // Next threshold when feature1 >= T1
+
+// Leaf output values - must match subtable
+const V1: u64 = 10; // Output value 1
+const V2: u64 = 20; // Output value 2
+const V3: u64 = 30; // Output value 3
+const V4: u64 = 40; // Output value 4
 
 pub struct GBDTInstruction<const WORD_SIZE: usize>;
 
 impl<const WORD_SIZE: usize> GBDTInstruction<WORD_SIZE> {
     // Decision tree inference function - identical to the one in subtable
     fn inference(left: u64, right: u64) -> u64 {
-        // Threshold constants for comparison - must match subtable
-        const T1: u64 = 50; // Threshold for splitting feature1
-        const T2: u64 = 30; // Next threshold when feature1 < T1
-        const T3: u64 = 70; // Next threshold when feature1 >= T1
-
-        // Leaf output values - must match subtable
-        const V1: u64 = 10; // Output value 1
-        const V2: u64 = 20; // Output value 2
-        const V3: u64 = 30; // Output value 3
-        const V4: u64 = 40; // Output value 4
         if left < T1 {
             if right < T2 {
                 V1
@@ -77,6 +79,15 @@ impl<const WORD_SIZE: usize> VirtualInstructionSequence for GBDTInstruction<WORD
             precompile_input: None,
             precompile_output_address: None,
         });
+
+        let lte1 = ASSERTLTEInstruction::<WORD_SIZE>(x, T1).lookup_entry();
+        assert_eq!(lte1, !(x > T1) as u64);
+
+        let lte2 = ASSERTLTEInstruction::<WORD_SIZE>(y, T2).lookup_entry();
+        assert_eq!(lte2, !(y > T2) as u64);
+
+        let lte3 = ASSERTLTEInstruction::<WORD_SIZE>(y, T3).lookup_entry();
+        assert_eq!(lte3, !(y > T3) as u64);
 
         virtual_trace.push(RVTraceRow {
             instruction: ELFInstruction {
