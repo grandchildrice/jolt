@@ -3,9 +3,9 @@ use tracer::{ELFInstruction, RVTraceRow, RegisterState, RV32IM};
 
 use super::VirtualInstructionSequence;
 use crate::jolt::instruction::{
-    add::ADDInstruction, beq::BEQInstruction, mul::MULInstruction,
+    // add::ADDInstruction, beq::BEQInstruction, mul::MULInstruction,
     virtual_advice::ADVICEInstruction,
-    virtual_assert_valid_signed_remainder::AssertValidSignedRemainderInstruction, JoltInstruction,
+    JoltInstruction,
 };
 
 pub struct GradientBoostInstruction<const WORD_SIZE: usize>;
