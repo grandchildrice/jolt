@@ -24,10 +24,11 @@ use crate::{
     field::JoltField,
     jolt::{
         instruction::{
-            div::DIVInstruction, divu::DIVUInstruction, lb::LBInstruction, lbu::LBUInstruction,
-            lh::LHInstruction, lhu::LHUInstruction, mulh::MULHInstruction,
-            mulhsu::MULHSUInstruction, rem::REMInstruction, remu::REMUInstruction,
-            sb::SBInstruction, sh::SHInstruction, VirtualInstructionSequence,
+            div::DIVInstruction, divu::DIVUInstruction, gradient_boost::GradientBoostInstruction,
+            lb::LBInstruction, lbu::LBUInstruction, lh::LHInstruction, lhu::LHUInstruction,
+            mulh::MULHInstruction, mulhsu::MULHSUInstruction, rem::REMInstruction,
+            remu::REMUInstruction, sb::SBInstruction, sh::SHInstruction,
+            VirtualInstructionSequence,
         },
         vm::{bytecode::BytecodeRow, rv32i_vm::RV32I, JoltTraceStep},
     },
@@ -203,6 +204,7 @@ impl Program {
                 tracer::RV32IM::LHU => LHUInstruction::<32>::virtual_trace(row),
                 tracer::RV32IM::LB => LBInstruction::<32>::virtual_trace(row),
                 tracer::RV32IM::LH => LHInstruction::<32>::virtual_trace(row),
+                tracer::RV32IM::GBDT_INFER => GradientBoostInstruction::<32>::virtual_trace(row),
                 _ => vec![row],
             })
             .map(|row| {

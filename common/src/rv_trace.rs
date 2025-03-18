@@ -453,6 +453,7 @@ pub enum RV32IM {
     DIV,
     DIVU,
     REM,
+    GBDT_INFER,
     REMU,
     FENCE,
     UNIMPL,
@@ -466,7 +467,6 @@ pub enum RV32IM {
     VIRTUAL_ASSERT_EQ,
     VIRTUAL_ASSERT_VALID_DIV0,
     VIRTUAL_ASSERT_HALFWORD_ALIGNMENT,
-    GBDT_INFER,
 }
 
 impl FromStr for RV32IM {
