@@ -1,4 +1,5 @@
 #![cfg_attr(feature = "guest", no_std)]
+#![allow(unused_assignments, asm_sub_register)]
 
 // Indices for features
 const FEATURE1_INDEX: usize = 0;
@@ -19,13 +20,8 @@ const V4: u8 = 40; // Output value 4
 // The jolt::provable attribute expects the input type to implement serde::Deserialize,
 // so we use Vec<Vec<u8>> for a collection of feature vectors.
 #[jolt::provable]
-fn predict(data: [[u8; 2]; 4]) -> u8 {
-    let mut output: u8 = 0;
-    for features in data {
-        // Use wrapping_add to avoid potential overflow during summation
-        output = output.wrapping_add(predict_feature(&features));
-    }
-    output
+fn predict(data: [u8; 2]) -> u8 {
+    predict_feature(&data)
 }
 
 // Predict for a single feature vector
@@ -44,5 +40,33 @@ fn predict_feature(features: &[u8]) -> u8 {
         } else {
             V4 // Right-right leaf
         }
+    }
+}
+
+// The jolt::provable attribute expects the input type to implement serde::Deserialize,
+// so we use Vec<Vec<u8>> for a collection of feature vectors.
+#[jolt::provable]
+fn predict_with_gbdt(data: [u8; 2]) -> u8 {
+    predict_feature_with_gbdt(&data)
+}
+
+// GBDT
+// call REM instead, because we don't have a GBDT instruction in the curren compiler toolchain
+// Predict for a single feature vector using the GBDT instruction
+fn predict_feature_with_gbdt(features: &[u8]) -> u8 {
+    use core::arch::asm;
+    let feature1 = features[FEATURE1_INDEX] as u32;
+    let feature2 = features[FEATURE2_INDEX] as u32;
+
+    unsafe {
+        let mut val_gbdt: u32 = 0;
+        asm!(
+            "REM {val}, {rs1}, {rs2}",
+            val = out(reg) val_gbdt,
+            rs1 = in(reg) feature1,
+            rs2 = in(reg) feature2,
+        );
+
+        val_gbdt as u8
     }
 }

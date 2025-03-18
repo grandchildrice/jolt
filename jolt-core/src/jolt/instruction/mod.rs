@@ -157,7 +157,7 @@ pub mod bgeu;
 pub mod bne;
 pub mod div;
 pub mod divu;
-pub mod gradient_boost;
+pub mod gbdt;
 pub mod lb;
 pub mod lbu;
 pub mod lh;

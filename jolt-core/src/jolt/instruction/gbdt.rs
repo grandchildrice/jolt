@@ -8,9 +8,9 @@ use crate::jolt::instruction::{
     JoltInstruction,
 };
 
-pub struct GradientBoostInstruction<const WORD_SIZE: usize>;
+pub struct GBDTInstruction<const WORD_SIZE: usize>;
 
-impl<const WORD_SIZE: usize> GradientBoostInstruction<WORD_SIZE> {
+impl<const WORD_SIZE: usize> GBDTInstruction<WORD_SIZE> {
     // Decision tree inference function - identical to the one in subtable
     fn inference(left: u64, right: u64) -> u64 {
         // Threshold constants for comparison - must match subtable
@@ -39,11 +39,11 @@ impl<const WORD_SIZE: usize> GradientBoostInstruction<WORD_SIZE> {
     }
 }
 
-impl<const WORD_SIZE: usize> VirtualInstructionSequence for GradientBoostInstruction<WORD_SIZE> {
+impl<const WORD_SIZE: usize> VirtualInstructionSequence for GBDTInstruction<WORD_SIZE> {
     const SEQUENCE_LENGTH: usize = 2;
 
     fn virtual_trace(trace_row: RVTraceRow) -> Vec<RVTraceRow> {
-        // GBDT_INFR source registers
+        // GBDTINFR source registers
         // let r_x = trace_row.instruction.rs1;
         // let r_y = trace_row.instruction.rs2;
         // Virtual registers used in sequence
@@ -114,6 +114,6 @@ mod test {
 
     #[test]
     fn gradient_boost_sequence_32() {
-        jolt_virtual_sequence_test!(GradientBoostInstruction<32>, RV32IM::GBDT_INFER);
+        jolt_virtual_sequence_test!(GBDTInstruction<32>, RV32IM::GBDT);
     }
 }
